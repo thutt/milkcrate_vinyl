@@ -1,0 +1,113 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+CREATING THE DATABASE
+=====================
+
+The player, the database editor and the phone app all work from one
+SQLite database.  It holds each song's tags, play count, rating and
+the playlists.  Creating it does not modify the music files.
+
+Requirements
+------------
+
+  * See 00-software-prerequisites.txt.
+  * A music folder.  All media files below it are used:
+
+        mp3 flac ogg oga opus spx m4a m4b mp4 wma wav aif aiff dsf
+
+    Other files and macOS "._" files are ignored.
+  * A build output directory (BOD) outside the project.
+
+Step 1: set up the shell
+------------------------
+
+    source scripts/setup --venv DIR --bod DIR --database FILE
+
+Example:
+
+    source scripts/setup --venv /home/me/music-venv \
+                         --bod /home/me/music-bod \
+                         --database /home/me/music.db
+
+See 01-configuring-the-shell.txt.
+
+Step 2: create the database
+---------------------------
+
+    scripts/initialize-database --root /path/to/music
+
+The database is the one given to setup.  --database (-d) FILE
+overrides it.
+
+The script:
+
+  1. Finds the media files under the root.
+  2. Reads their tags.  Track numbers become integers, BPM is 0 where
+     there is none, and ALBUM is taken from the folder name where there
+     is none.
+  3. Stores the tags.  The root is stored in the database; song paths
+     are stored relative to it.
+  4. Marks duplicates: songs with the same artist and title.  The FLAC
+     is the primary; otherwise the newer file, then the larger.
+
+Progress is printed every 500 files.  It ends with a summary:
+
+    /home/me/music.db: 12000 files (3 unreadable), 85000 tag values,
+    140 marked as duplicates in 70 groups, 18.2 MB
+
+Unreadable files are still listed, without tags.
+
+Options
+-------
+
+  --root DIR, -r DIR         music folder (required)
+  --database FILE, -d FILE   database to create
+  --jobs N, -j N             files read in parallel (default 4)
+  --no-album-from-folder     leave ALBUM empty where a file has none
+  --replace                  replace an existing database
+
+Existing database
+-----------------
+
+If the database file exists, the script stops and changes nothing.
+
+  * To add new files, use File > Scan for New Files in the editor.
+  * To start over, use --replace.  The old file is copied to
+    FILE.bak-before-init first (.bak-before-init-2 etc. if that
+    exists).  Play counts, ratings and playlists in the new database
+    are lost.
+
+Not done by this script
+-----------------------
+
+  * Loudness for volume leveling: desktop/loudness.py
+  * Tempo (BPM): desktop/bpm_batch.py
+
+Next
+----
+
+  scripts/play                   run the player
+  scripts/edit-database          edit the data
+  scripts/change-music-root-directory --root DIR
+                                 after the music folder is moved
+
+Errors
+------
+
+  "no database: --database was not given and MILKCRATEVINYL_DATABASE is
+  not set"
+      Source scripts/setup or give --database.
+  "not a directory"
+      --root is wrong.
+  "no media files under ..."
+      The folder has no files of the types listed above.
+  "... already exists"
+      See "Existing database".
+  Songs with accented or other non-ASCII letters in their names do not
+  play, and their paths in the database show each such letter as two
+  wrong characters.
+      The database was created by Python running with a locale that is
+      not UTF-8.  The scripts now force UTF-8.  Create the database
+      again with --replace.

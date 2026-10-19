@@ -1,0 +1,154 @@
+#!/bin/bash
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Runs under bash or zsh.  Paths are found from the location of this script.
+#
+# Installs what scripts/build-for-android needs into the build output
+# directory (BOD), in ${MILKCRATEVINYL_BOD}/android-dev: a JDK 17, the Android
+# SDK (platform 34, build-tools 34.0.0, NDK 26.1) and Qt 6.8.3 for the desktop
+# and for Android (arm64 for the phones, x86_64 for the emulator), plus CMake
+# and Ninja.  It also installs the emulator with its Android 36 system image
+# and creates the virtual device "a16" (start it with scripts/run-emulator),
+# and keeps the key the APKs are signed with in the BOD (copied from
+# ~/.android/debug.keystore when that exists, so apps already installed on a
+# phone can still be updated).  It needs network access and about 9 GB of disk
+# space, and can be run again: whatever is already installed is skipped.
+#
+#     scripts/setup-android-tools
+set -o errexit
+set -o nounset
+set -o pipefail
+here=$(cd "$(dirname "${0}")" && pwd)
+root=$(dirname "${here}")
+# no .pyc files, also in anything Python starts
+export PYTHONDONTWRITEBYTECODE=1
+. "${here}/require-venv"
+music_require_venv
+music_require_bod
+
+# programs this script uses that a minimal system may not have
+missing=
+for program in curl tar unzip mktemp realpath; do
+    if ! command -v "${program}" >/dev/null 2>&1; then
+        missing="${missing} ${program}"
+    fi
+done
+if [ -n "${missing}" ]; then
+    echo "error: these programs are needed to download and unpack the" >&2
+    echo "build tools, and are not installed:${missing}" >&2
+    echo "  Debian/Ubuntu:  sudo apt install curl tar unzip coreutils" >&2
+    echo "  Fedora:         sudo dnf install curl tar unzip coreutils" >&2
+    exit 1
+fi
+
+bod=$(realpath -m -- "${MILKCRATEVINYL_BOD}")
+project=$(realpath -- "${root}")
+case "${bod}/" in
+    "${project}/"*)
+        echo "error: MILKCRATEVINYL_BOD=${bod} is inside the project" >&2
+        echo "(${project}); use a directory outside it." >&2
+        exit 1
+        ;;
+esac
+python="${MILKCRATEVINYL_VENV}/bin/python"
+tools="${bod}/android-dev"
+qt_version=6.8.3
+mkdir -p "${tools}/downloads"
+
+if [ ! -d "${tools}/pylib/aqt" ] || [ ! -d "${tools}/pylib/cmake" ]; then
+    echo "Installing aqtinstall, CMake and Ninja ..."
+    "${python}" -B -m pip install --quiet --target "${tools}/pylib" \
+        aqtinstall cmake ninja
+fi
+
+if [ ! -x "${tools}/jdk17/bin/java" ]; then
+    echo "Installing JDK 17 ..."
+    api="https://api.adoptium.net/v3/assets/latest/17/hotspot"
+    api="${api}?architecture=x64&image_type=jdk&os=linux"
+    link=$(curl -fsS "${api}" | "${python}" -I -B -c '
+import json
+import sys
+print(json.load(sys.stdin)[0]["binary"]["package"]["link"])')
+    curl -fL -o "${tools}/downloads/jdk17.tar.gz" "${link}"
+    rm -rf "${tools}/jdk17"
+    mkdir "${tools}/jdk17"
+    tar -xzf "${tools}/downloads/jdk17.tar.gz" -C "${tools}/jdk17" \
+        --strip-components=1
+fi
+export JAVA_HOME="${tools}/jdk17"
+export PATH="${JAVA_HOME}/bin:${PATH}"
+
+sdk="${tools}/android-sdk"
+if [ ! -d "${sdk}/cmdline-tools/latest" ]; then
+    echo "Installing the Android command line tools ..."
+    url="https://dl.google.com/android/repository"
+    url="${url}/commandlinetools-linux-11076708_latest.zip"
+    curl -fL -o "${tools}/downloads/cmdline-tools.zip" "${url}"
+    rm -rf "${sdk}/cmdline-tools"
+    mkdir -p "${sdk}/cmdline-tools"
+    unzip -q "${tools}/downloads/cmdline-tools.zip" -d "${sdk}/cmdline-tools"
+    mv "${sdk}/cmdline-tools/cmdline-tools" "${sdk}/cmdline-tools/latest"
+fi
+sdkmanager="${sdk}/cmdline-tools/latest/bin/sdkmanager"
+ndk="ndk;26.1.10909125"
+image="system-images;android-36;google_apis;x86_64"
+if [ ! -d "${sdk}/ndk/26.1.10909125" ] || [ ! -d "${sdk}/build-tools/34.0.0" ] \
+        || [ ! -d "${sdk}/platforms/android-34" ] \
+        || [ ! -d "${sdk}/emulator" ] \
+        || [ ! -d "${sdk}/system-images/android-36/google_apis/x86_64" ]; then
+    echo "Installing the Android SDK packages ..."
+    # sdkmanager reads the licence answers from a pipe; yes ends with SIGPIPE
+    yes | "${sdkmanager}" --sdk_root="${sdk}" --licenses > /dev/null || true
+    "${sdkmanager}" --sdk_root="${sdk}" "platform-tools" \
+        "platforms;android-34" "build-tools;34.0.0" "${ndk}" "emulator" \
+        "${image}"
+fi
+
+# the virtual device and the Android tools' settings stay in the BOD too
+export ANDROID_USER_HOME="${bod}/android-user"
+export ANDROID_AVD_HOME="${ANDROID_USER_HOME}/avd"
+export ANDROID_EMULATOR_HOME="${ANDROID_USER_HOME}"
+mkdir -p "${ANDROID_AVD_HOME}"
+if [ ! -d "${ANDROID_AVD_HOME}/a16.avd" ]; then
+    echo "Creating the virtual device a16 ..."
+    echo no | "${sdk}/cmdline-tools/latest/bin/avdmanager" create avd \
+        -n a16 -k "${image}" -d pixel_6 --force
+fi
+
+aqt() {
+    # aqt writes aqtinstall.log into the current directory: keep it in the BOD
+    (cd "${tools}" && PYTHONPATH="${tools}/pylib" "${python}" -B -m aqt "${@}")
+}
+qt="${tools}/Qt/${qt_version}"
+if [ ! -d "${qt}/gcc_64" ]; then
+    echo "Installing Qt ${qt_version} for the desktop ..."
+    aqt install-qt linux desktop "${qt_version}" linux_gcc_64 \
+        -m qtmultimedia --outputdir "${tools}/Qt"
+fi
+for target in android_arm64_v8a android_x86_64; do
+    if [ ! -d "${qt}/${target}" ]; then
+        echo "Installing Qt ${qt_version} for ${target} ..."
+        aqt install-qt all_os android "${qt_version}" "${target}" \
+            -m qtmultimedia --outputdir "${tools}/Qt"
+    fi
+done
+
+key="${tools}/debug.keystore"
+if [ ! -f "${key}" ]; then
+    if [ -f "${HOME}/.android/debug.keystore" ]; then
+        echo "Copying the existing signing key to ${key}"
+        cp -p "${HOME}/.android/debug.keystore" "${key}"
+    else
+        echo "Creating a signing key in ${key}"
+        keytool -genkeypair -keystore "${key}" -storepass android \
+            -keypass android -alias androiddebugkey -keyalg RSA \
+            -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+    fi
+fi
+echo "The Android tools are installed in ${tools}."

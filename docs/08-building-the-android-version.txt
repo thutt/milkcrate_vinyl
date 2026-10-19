@@ -1,0 +1,130 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+BUILDING THE ANDROID VERSION
+============================
+
+The phone app is a Qt 6.8 / QML program in android/ (C++17).  Package
+org.musicplayer.player, app name "Milkcrate Vinyl".  Minimum Android 8
+(API 26), target API 34.
+
+Prerequisites
+-------------
+
+  * 00-software-prerequisites.txt
+  * The shell set up as in 01-configuring-the-shell.txt: MILKCRATEVINYL_VENV
+    and MILKCRATEVINYL_BOD are used.  The build writes only to the BOD;
+    the source directories are never written to, and CMake refuses an
+    in-source build.
+
+Command
+-------
+
+    scripts/build-for-android [arm64_v8a | x86_64 | desktop]
+
+  arm64_v8a   APK for phones (default)
+  x86_64      APK for the emulator
+  desktop     Debug Qt build that runs on this computer
+
+Output (all in the BOD):
+
+    ${MILKCRATEVINYL_BOD}/<target>/                     build tree
+    ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-<target>.apk    signed APK
+    ${MILKCRATEVINYL_BOD}/<target>/musicplayer          desktop target
+
+Tools
+-----
+
+The build uses the tools in ${MILKCRATEVINYL_BOD}/android-dev.  If any
+is missing, build-for-android prints a notice and runs
+scripts/setup-android-tools, then continues.  This happens only when
+the tools are not installed.  It needs network access and about 9 GB
+for the tools; the Gradle cache and build trees need more.
+
+setup-android-tools can be run alone and again; installed parts are
+skipped.  It installs:
+
+    aqtinstall, CMake, Ninja   (pip, into android-dev/pylib)
+    JDK 17                     (Adoptium)
+    Android command-line tools, platform-tools, platform android-34,
+    build-tools 34.0.0, NDK 26.1.10909125, emulator and the system
+    image android-36 google_apis x86_64
+    Qt 6.8.3 with qtmultimedia: desktop (gcc_64), android_arm64_v8a,
+    android_x86_64
+    virtual device "a16" (pixel_6) in android-user/avd
+    debug.keystore (see below)
+
+Other directories in the BOD: gradle/ (Gradle cache), android-user/
+(emulator device and settings).
+
+Steps
+-----
+
+For an Android target, build-for-android:
+
+  1. Runs qt-cmake with Ninja (Release, the NDK and SDK paths, and
+     the desktop Qt as the host).
+  2. Builds the "apk" target (CMake, then Gradle).
+  3. Aligns the unsigned APK with zipalign.
+  4. Signs it with apksigner using android-dev/debug.keystore.
+
+For "desktop", it builds the target musicplayer with the desktop Qt in
+Debug mode; no Android tools are used.
+
+Signing key
+-----------
+
+Every APK is signed with the debug key.  setup-android-tools copies
+~/.android/debug.keystore to android-dev/debug.keystore if that file
+exists, and creates a new key only if it does not.
+
+A phone accepts an update only if it is signed with the same key as
+the installed app.  Otherwise the app has to be uninstalled, which
+erases its data.  Keep ~/.android/debug.keystore, and keep a copy
+outside the BOD if the BOD is in /tmp.
+
+Rebuilding
+----------
+
+A build is incremental.  If the tools are moved or reinstalled to a
+different location, the build tree's CMake cache points at the old
+paths; build-for-android detects this, removes the tree and configures
+again.  Deleting the BOD removes everything above; the next build
+installs the tools and rebuilds.
+
+Emulator
+--------
+
+    scripts/run-emulator
+
+starts the virtual device a16 (Android 36, x86_64, no window, no
+sound) and installs the tools first if needed.  It runs until stopped,
+so run it in the background.  Install the x86_64 APK with the adb in
+android-dev/android-sdk/platform-tools (see 09).
+
+Source layout (android/)
+------------------------
+
+    CMakeLists.txt        build definition
+    Main.qml              user interface
+    main.cpp, player.*    application object, playback state
+    engine.*              playback engine, queue, containers
+    trackmodel.*          song list model
+    playlists.*, dynamic.*  playlists and dynamic-playlist rules
+    sync.*                sync server for the desktop
+    android/              manifest, resources, Java (MusicActivity,
+                          PlaybackService)
+    art/                  icon sources
+    tools/                desktop-side phone tools (see 11)
+
+Errors
+------
+
+  "MILKCRATEVINYL_BOD is not set"
+      Source scripts/setup (see 01).
+  "... is inside the project"
+      Use a BOD outside the project.
+  "the build tools are still missing after installing"
+      The installation failed; read the messages above it, fix (usually
+      network) and run again.

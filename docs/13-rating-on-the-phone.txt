@@ -1,0 +1,69 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+RATING ON THE PHONE
+===================
+
+The phone rates the song that is playing.  Ratings are explained in
+07-song-rating.txt: unrated and 0 stars are different values.
+
+Where the rating is shown
+-------------------------
+
+  * In the song list, the playing song's row is larger and shows its
+    rating below the artist.
+  * When the playing song's row is not on the screen, the rating is
+    shown in the control panel at the bottom, below the song's name.
+  * On the lock screen and in the notification, the line under the
+    song shows the rating as a number and a star ("4 *" in this text;
+    the phone shows the star symbol), or "unrated".
+
+Display:
+
+    unrated     the word "unrated", no stars
+    rated       a circle with the number of stars (0 to 5), and five
+                stars, filled for the rating
+
+In the app
+----------
+
+  * Tap "unrated": the song becomes 0 stars.
+  * Tap star N: the song gets N stars.  Tapping the star that is
+    already the rating sets 0 stars.
+  * Tap the circle: from 1 to 5 stars the rating goes to 0 stars; from
+    0 stars it goes to unrated.
+
+Lock screen and notification
+----------------------------
+
+Two buttons change the rating by one step:
+
+    one star more:  unrated -> 0 stars -> 1 star -> ... -> 5 stars
+                    (no change at 5 stars)
+    one star less:  5 stars -> ... -> 1 star -> 0 stars -> unrated
+                    (no change when unrated)
+
+The button descriptions name the current rating in the same form:
+"One star more (3 *)".
+
+Storage and sync
+----------------
+
+A rating is written to the phone's tags.db at once, with the time of the
+change.  It reaches the desktop at the next sync, where the newer of
+the desktop's and the phone's change wins for each song (11).
+
+If the phone's database is from an older version, rating fails with
+"The database is from an older version: sync with the desktop to rate
+tracks."  Sync once and rate again.
+
+Rating on the phone cannot be done for a song that is not playing.
+Rate other songs on the desktop.
+
+Using ratings
+-------------
+
+Dynamic playlists made on the desktop can select by rating (05); the
+phone plays them like other playlists.  Use "Rating is not set" to list
+unrated songs, or "Rating = 0" for songs rated 0 stars.

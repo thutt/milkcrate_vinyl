@@ -1,0 +1,113 @@
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Sourced by the wrapper scripts (bash or zsh); the caller sets ${here} to its
+# own directory first.  Defines functions that stop the caller with a clear
+# message when what scripts/setup records is missing.
+
+# Python reads and writes file names in the encoding of the locale, which is
+# not UTF-8 everywhere.  Names would then be stored garbled in the database,
+# and Qt, which always uses UTF-8, would not find the files.  UTF-8 mode makes
+# every program started by a script use UTF-8 for file names and text files.
+export PYTHONUTF8=1
+
+music_setup_hint() {
+    echo "  Set it in this shell:" >&2
+    echo "      source ${here}/setup --venv DIR --bod DIR --database FILE" >&2
+}
+
+music_require_variable() {
+    if [ -z "${MILKCRATEVINYL_VENV:-}" ]; then
+        echo "error: MILKCRATEVINYL_VENV is not set: it says where the" >&2
+        echo "Python virtual environment is." >&2
+        music_setup_hint
+        exit 1
+    fi
+}
+
+# The virtual environment is created here, the first time a script needs it
+# (scripts/create-venv; needs network access).
+music_require_venv() {
+    music_require_variable
+    if [ ! -x "${MILKCRATEVINYL_VENV}/bin/python" ]; then
+        echo "There is no virtual environment at ${MILKCRATEVINYL_VENV}:" >&2
+        echo "creating it.  This happens only when it is missing;" >&2
+        echo "please wait." >&2
+        if ! "${here}/create-venv"; then
+            echo "error: the virtual environment could not be created." >&2
+            exit 1
+        fi
+    fi
+}
+
+# music_option_given LONG SHORT ARGUMENTS...: succeeds when the arguments hold
+# the option LONG (as "LONG value" or "LONG=value") or the short form SHORT
+# (leave it empty if there is none).
+music_option_given() {
+    music_long=${1}
+    music_short=${2}
+    shift 2
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            "${music_long}" | "${music_long}="*)
+                unset music_long music_short
+                return 0
+                ;;
+        esac
+        if [ -n "${music_short}" ]; then
+            case "${1}" in
+                "${music_short}" | "${music_short}"?*)
+                    unset music_long music_short
+                    return 0
+                    ;;
+            esac
+        fi
+        shift
+    done
+    unset music_long music_short
+    return 1
+}
+
+# The library database the programs open.  A wrapper uses the database option
+# it was given; without one it needs MILKCRATEVINYL_DATABASE (set by
+# scripts/setup --database), and it stops here when that is not set either.
+# music_require_database OPTION: OPTION is the option the program takes.
+music_require_database() {
+    if [ -z "${MILKCRATEVINYL_DATABASE:-}" ]; then
+        echo "error: no database: ${1} was not given and" >&2
+        echo "MILKCRATEVINYL_DATABASE is not set." >&2
+        echo "  Give the database with ${1} FILE, or set it for all the" >&2
+        echo "  scripts in this shell:" >&2
+        echo "      source ${here}/setup --venv DIR --bod DIR \\" >&2
+        echo "          --database FILE" >&2
+        exit 1
+    fi
+}
+
+# The build output directory (BOD) for scripts/build-for-android.
+music_require_bod() {
+    if [ -z "${MILKCRATEVINYL_BOD:-}" ]; then
+        echo "error: MILKCRATEVINYL_BOD is not set: it is the build output" >&2
+        echo "directory (BOD) that all build output is written to." >&2
+        music_setup_hint
+        exit 1
+    fi
+}
+
+# music_require_env NAME "what it is": stop the caller with a clear message
+# unless the environment variable NAME is set.
+music_require_env() {
+    music_env_value=
+    eval "music_env_value=\${${1}:-}"
+    if [ -z "${music_env_value}" ]; then
+        echo "error: the environment variable ${1} is not set: ${2}." >&2
+        echo "  Set it in this shell before running this script:" >&2
+        echo "      export ${1}='...'" >&2
+        exit 1
+    fi
+    unset music_env_value
+}

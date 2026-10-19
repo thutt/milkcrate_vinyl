@@ -1,0 +1,228 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+DYNAMIC PLAYLISTS
+=================
+
+A dynamic playlist selects its songs from the library by rules, for
+example "genre is jazz and rating >= 4 and not played in 30 days".  A
+song that has been played leaves the list and a matching song is added
+at the end.  (A static playlist holds only what you add; see 04.)
+
+In the list it is marked with a diamond and its song count.  It exists
+only in the database.
+
+Creating
+--------
+
+Playlists tab > New dynamic...
+
+  1. Name: not used by another playlist.
+  2. Rules (below).
+  3. Choose in the order: how songs are picked from the matches.
+  4. Prefer file types: optional.
+  5. Count matches: shows how many library songs the rules select.
+  6. OK: the playlist is filled.
+
+Rules
+-----
+
+A rule is a field, an operator and a value.  Add rule adds one; the
+minus button removes it.
+
+"Match all|any of these" at the top: with all, a song must satisfy
+every rule; with any, one rule is enough.  Add group adds a group with
+its own all/any; groups nest.  For
+
+    genre is soundtrack AND (title contains star OR title contains
+    raiders)
+
+use an "all" list with the genre rule and an "any" group with the two
+title rules.  An empty group is not allowed.  With no rules, every song
+qualifies.
+
+Text fields: Artist, Title, Album, Genre, Composer, Path, Format.
+
+    contains          a word of the value starts with the text
+    does not contain  no value does
+    is                the whole value equals the text
+    is not            no value does
+    is empty          there is no value
+
+  * Case is ignored.
+  * "contains" matches the start of a word: "star" matches "Star Wars"
+    and "Death Star", not "Mustard".
+  * Artist also checks Album artist.
+  * Format is the lower-case file extension (flac, mp3, ...).  Path is
+    relative to the music folder.
+
+Number fields: Rating, Play count, Year, BPM, BPM reliability (0 low,
+1 medium, 2 high), Track number.
+
+    =  not equal  <  <=  >  >=    compare with a whole number
+    is not set / is set           the song has no value / has one
+
+  * Year is the first number in DATE.
+  * A song with no rating is "not set".  It is not rated 0; see 07.
+  * A song with no tempo has BPM 0.
+
+Date field: Last played.
+
+    within the last (days)
+    more than (days) ago, or never
+    never
+
+General rule: a song with no value for a field (unrated, never played)
+fails every comparison except "is not set", "never", "is empty" and the
+negative text operators.
+
+Tags with several values
+------------------------
+
+A song can have several values for a tag (see 03).  `GENRE Rock;
+Blues` is two genres, Rock and Blues, and a rule tests each value.
+
+  * Positive operators ("is", "contains") are true if any value
+    matches.
+  * Negative operators ("is not", "does not contain") are true only if
+    no value matches.
+
+For `Rock; Blues`:
+
+    Genre is Rock                 true
+    Genre is Jazz                 false
+    Genre is not Rock             false
+    Genre is not Jazz             true
+
+A song with no genre passes the negative operators.
+
+"is" matches a whole value: "Genre is Rock" matches Rock, not Hard Rock
+or Folk Rock.  "contains rock" matches Rock, Hard Rock, Folk Rock and
+Rockabilly, not Shamrock.
+
+Combinations:
+
+  Both genres:    match all: Genre is Rock; Genre is Blues
+  Either genre:   match any: Genre is Rock; Genre is Blues
+  Blues, not Rock: match all: Genre is Blues; Genre is not Rock
+
+A value that was never split, such as the single value "Rock, Blues",
+is one genre, and "Genre is Rock" does not match it.  To find these,
+tick "Only lists to split" in the editor's Tags tab and rename each
+value with "; " between the parts (see 03).
+
+The same applies to Artist, Composer and the other text fields.  Blank
+values are ignored.
+
+Duplicates
+----------
+
+A dynamic playlist never selects a duplicate (a file marked as a copy of
+a primary; see 03).  This applies to filling, regenerating and
+refilling, to the "N matched" count and to Count matches, and on the
+phone.  To have a particular copy selected, make it the primary.
+
+Order and file types
+--------------------
+
+"Choose in the order" selects which matches fill the list: Random,
+Artist, Album, Title, Year, Rating, Play count, Last played or BPM.
+"descending" reverses it; "Rating, descending" gives the highest rated
+songs.  Ties are in album order.  Songs with no value sort lowest.
+
+"Prefer file types" is an optional list such as "flac, m4a, mp3".  The
+list is filled from the first type and uses the next only when there
+are too few songs of the earlier types.  Types not listed come last.
+The chosen order applies within a type.
+
+Length
+------
+
+"Dynamic length" (1 to 500, default 20) on the Playlists tab is the
+number of songs in each dynamic playlist.  Lists that are short are
+topped up when the player or editor starts and as songs are played.
+
+Viewing and changing rules
+--------------------------
+
+The box under the list shows the rules in words and "N matched", the
+number of library songs the rules select.  Drag the divider above it to
+resize.
+
+  * Edit Rules: change the rules or name.  The playlist is refilled.
+  * Regenerate: select the songs again and clear the record of played
+    songs.
+  * Entries cannot be moved or removed by hand.
+
+Songs leaving the list
+----------------------
+
+In the player a song counts as played after 20 seconds of listening
+(seeking does not count).  When a counted song ends or is left, it is
+removed from every dynamic playlist and a new matching song is
+appended.  Songs already on the list, and songs played since the list
+was generated, are not selected.
+
+A song skipped before it counts is removed when a song that does count
+is reached.  Returning to a skipped song cancels the skip.
+
+Regenerate and Edit Rules clear the record of played songs.
+
+Phone
+-----
+
+The phone shows dynamic playlists with the same marker and "N matched"
+count, and plays them.  Songs played on the phone leave the list and
+are replaced; the change reaches the desktop at the next sync.  Rules
+are edited on the desktop.
+
+Example: a "Work" genre
+-----------------------
+
+A genre need not be a real style.  This example marks songs for work
+and plays them without repeats.
+
+1. Mark the songs.  In the editor, select the songs.  Click the GENRE
+   row (if the songs have no GENRE, click Add Tag and enter GENRE).
+   Click Add Value..., enter Work, confirm.  Songs keep their other
+   genres: `Jazz` becomes `Jazz; Work`.  Do not type into the GENRE
+   cell instead, which replaces the genres of every selected song.
+   Remove Value... removes Work again.
+
+2. Create the playlist.  New dynamic...:
+
+       Name:                 Work
+       Match:                all
+       Rule 1:               Genre is Work
+       Rule 2:               Last played, more than (days) ago, or
+                             never: 14
+       Choose in the order:  Random
+
+   Use "is", not "contains", so that "Homework" does not match.
+
+3. Play it in the player.  A song leaves the list after it has been
+   played and a new one is added, so the list stays full.
+
+Songs do not repeat because the playlist records the songs it has
+played, and because rule 2 uses each song's stored last-played time:
+a song played within 14 days is not selected even after Regenerate or
+Edit Rules clear the record.
+
+Choose the window to fit the library.  If you play more Work songs in
+the window than the library has, the list shrinks and then empties.
+Count matches shows how many songs qualify now.
+
+Variations:
+
+  * Add Rating >= 3 to skip unrated and poorly rated songs.
+  * Add BPM < 110 and BPM > 0 for slower music (BPM 0 means unknown).
+  * Use the playlist in a container with a time limit (see 06).
+  * Other genres: Focus, Gym, Dinner.  A song can have several.
+
+Other examples
+--------------
+
+  Unrated songs to rate:        Rating is not set; Random
+  Fast songs:                   BPM >= 140; BPM reliability >= 1; Random
+  One artist in album order:    Artist contains miles; Album

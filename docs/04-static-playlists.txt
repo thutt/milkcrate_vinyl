@@ -1,0 +1,108 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+STATIC PLAYLISTS
+================
+
+A static playlist holds the songs you add, in the order you set.  (A
+dynamic playlist selects its songs by rules; see 05.)  The program
+calls it a "manual" playlist.  The list shows its name and entry
+count: "Road trip  (42)".
+
+Playlists exist only in the database.  Deleting one does not delete
+songs.
+
+Where
+-----
+
+The Playlists tab of the player and of the editor has the same panel.
+Only the player can play.  The phone app plays static playlists but
+cannot create or change them; make them on the desktop and sync.
+
+The top of the panel lists the playlists.  The bottom lists the entries
+of the selected one.
+
+Creating
+--------
+
+  * Playlists tab > New..., enter a name: creates an empty playlist.
+  * Select songs, right-click > Add N tracks to playlist > New
+    playlist...: creates one containing them.  Available in the
+    editor's Files tab and the player's song list.
+
+A name must be non-empty and not used by another playlist.  Static and
+dynamic playlists share names.  Containers and sequences have separate
+names (see 06).
+
+Adding songs
+------------
+
+Select songs (or folders in the editor), right-click > Add N tracks to
+playlist > the playlist.  The songs are appended in listed order.
+
+  * Only static playlists are offered.
+  * A song may be in a playlist more than once.
+
+Duplicates
+----------
+
+A duplicate is a file marked as a copy of a primary file (see 03).
+When songs are added to a static playlist, a duplicate is replaced by
+its primary, without notice.
+
+Not done:
+
+  * A duplicate already in a playlist is not removed when it is marked
+    as a duplicate or when another file is made the primary.  Remove
+    such entries by hand.
+  * Adding the same song twice is not prevented.
+
+Dynamic playlists never select duplicates (see 05).
+
+Reordering and removing
+-----------------------
+
+Select the playlist.  Entries are shown as "Title - Artist"; the
+tooltip shows the path.
+
+  * Reorder: drag an entry, or select entries and click Move up / Move
+    down.
+  * Remove: select entries and click Remove or press Delete.  The songs
+    stay in the library.
+
+Changes are stored immediately.
+
+Renaming and deleting
+---------------------
+
+  * Rename...: enter a new name, not used by another playlist.
+  * Delete: asks for confirmation, and lists the containers that use
+    the playlist; it is removed from them.
+
+Playing
+-------
+
+In the player, select the playlist and click Play: it plays from the
+top, or from the selected entry.  Double-clicking an entry plays from
+there.
+
+Shuffle plays in random order; a song does not repeat until all have
+played, and a song listed twice counts once per round.
+
+Next and Previous move through the playlist.  Editing the playlist
+while it plays is allowed; playback continues from the current song.  If
+the playing playlist is deleted, the current song finishes and the
+player returns to the library list.
+
+On the phone, open the Playlists tab and tap a playlist to see its
+songs.  The Play button on that tab plays the marked playlist.
+
+Removing songs from the library also removes them from all playlists.
+
+Storage
+-------
+
+A playlist is a row in the playlist table (name, creation time; no
+rules).  Each entry is a row in playlist_item (playlist, position,
+song).  Deleting a playlist or a library song deletes its entries.

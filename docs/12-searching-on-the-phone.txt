@@ -1,0 +1,62 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+SEARCHING ON THE PHONE
+======================
+
+The Songs tab lists every song in the library (duplicates are not
+listed) and has a search box in the top bar.  The placeholder reads
+"Artist, album, song or genre (N)", where N is the number of songs in the
+library.
+
+Matching
+--------
+
+The list shows the songs that match every word typed.
+
+  * Each word must match the start of a word in the song's title,
+    artist, album or genre, taken together.  "dio" matches "Dio" and
+    "Dion", not "Audio".
+  * The order of the words does not matter, and the words may match
+    different fields: "dio holy" finds "Holy Diver" by Dio.
+  * Capitals are ignored.
+  * Punctuation counts as a space: "rock&roll", "rock/roll" and
+    "rock roll" are the same search.  Accents are not removed.
+  * A song's genre is all of its genres.  A song with the genres
+    "Rock; Blues" is found by "rock" and by "blues".
+  * Only the ARTIST tag is searched, not the album artist.
+  * A word matches at the start of a word only: "star" finds "Star
+    Wars" and "Death Star", not "Mustard".
+
+There are no field prefixes (as in "artist:dio"), phrase quotes or "="
+as in the desktop player.  Each word is looked for in all four fields.
+
+Examples:
+
+    miles kind       songs with a word starting "miles" and a word
+                     starting "kind" in title, artist, album or genre
+    work             songs with the genre Work (and any other song with
+                     a word starting "work"; see 05 for genres used as
+                     labels)
+    rock blues       songs with both words
+
+The list updates 200 ms after typing stops.  If nothing matches, the
+list shows "Nothing matches".  Clear the box to see all songs.
+
+Sorting
+-------
+
+The button next to the search box sets the order: Artist (the default,
+then album, track number and title), Title, Album (then track number)
+or Folder (the file's path).  The search applies to the sorted list.
+
+Playing from a result
+---------------------
+
+Tap a song to play it.  The songs in the list as it is shown (filtered
+and sorted) become the queue: Next plays the song below, and shuffle
+shuffles that list.  Tapping the song that is already playing does not
+restart it or change the queue.
+
+Search applies to the Songs tab only.  The Playlists tab has no search.

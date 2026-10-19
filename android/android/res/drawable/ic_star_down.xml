@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) 2026 Logic Magicians Software -->
+<!-- SPDX-License-Identifier: GPL-3.0-only
+     This program is free software: you can redistribute it and/or modify it
+     under the terms of the GNU General Public License version 3 as published
+     by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+     see the file LICENSE for the license text. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="26" android:viewportHeight="26">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2 l2.9,5.9 6.5,0.95 -4.7,4.6 1.1,6.5
+            L12,16.9 6.2,19.95 7.3,13.45 2.6,8.85 9.1,7.9 z"/>
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M15.5,18 h6.5 v2.2 h-6.5 z"/>
+</vector>

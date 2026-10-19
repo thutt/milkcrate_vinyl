@@ -1,0 +1,123 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+SONG RATING
+===========
+
+A song's rating has seven possible values:
+
+    unrated, 0 stars, 1 star, 2 stars, 3 stars, 4 stars, 5 stars
+
+Unrated and 0 stars are different.
+
+  Unrated   The song has no rating.  All songs start unrated.
+  0 stars   The song has been rated, with the lowest rating.
+
+                          Unrated            0 stars
+    --------------------  -----------------  -------------------
+    Stored                NULL               the number 0
+    Rating column         blank              five empty stars
+    Playing-song display  "unrated"          circle, five empty stars
+    Phone notification    "unrated"          "0 *"
+    Sort                  lowest             above unrated, below 1 star
+    Dynamic rule          "Rating is not     "Rating = 0", "Rating < 3",
+                          set" only          "Rating <= 1", ...
+
+An unrated song has no number to compare, so it fails every comparison.
+The rule "Rating < 3" selects songs rated 0, 1 and 2, not unrated
+songs.  "Rating >= 3" does not select them either.  To find unrated
+songs use "Rating is not set".  To find songs rated 0 use "Rating = 0".
+
+Changing a rating
+-----------------
+
+Ratings change one step at a time through 0 stars:
+
+    unrated <-> 0 stars <-> 1 star <-> ... <-> 5 stars
+
+Where a rating is stored
+------------------------
+
+A rating is stored in the database only.  It is not a tag, it is not
+written to the music files, and it is stored as soon as it is set.
+
+Rating on the desktop
+---------------------
+
+1. Rating menu (player and editor).  Select songs or folders and
+   choose:
+
+       Not rated    Ctrl+Backspace
+       0 stars      Ctrl+0
+       1 star       Ctrl+1
+       ...
+       5 stars      Ctrl+5
+
+   All selected songs get the rating.  The editor asks first when more
+   than 25 songs are selected, and offers the same choices under
+   right-click > Rate.
+
+2. Rating column.  It shows five stars, filled for the rating, and is
+   blank for an unrated song.  Right-click a column heading to show or
+   hide columns.
+
+     * Click an unrated cell: 0 stars.
+     * Click a star: that many stars.  A click left of the first star
+       sets 0 stars.
+     * Double-click: unrated.
+
+   A click affects only the song in that row.
+
+3. Playing-song display (player), next to the playing song's name.
+
+     * Unrated: the word "unrated"; click for 0 stars.
+     * Rated: a circle and five stars.  Click star N for N stars; click
+       the star that is already set for 0 stars; click the circle for
+       0 stars, and again at 0 stars for unrated.
+
+Finding songs by rating
+-----------------------
+
+  * Sort by the Rating column; unrated songs sort first.
+  * In a dynamic playlist (see 05) use the Rating field with =, not
+    equal, <, <=, >, >=, "is not set" (unrated) or "is set" (0 to 5).
+
+        Rating >= 4         4 and 5 stars
+        Rating = 0          rated 0
+        Rating is not set   unrated
+        Rating is set       rated, 0 to 5
+
+  * A dynamic playlist can be ordered by rating; unrated songs sort
+    lowest.
+
+Rating on the phone
+-------------------
+
+The phone shows the rating of the playing song.
+
+  * In the app: "unrated", or a circle with the number of stars and
+    five stars.  Tap a star to set that many; tap the set star for 0;
+    tap the circle to step down to 0 and then to unrated.
+  * Lock screen and notification: buttons for one star less and one
+    star more.  The line under the song shows the stars or "unrated".
+
+        more: unrated -> 0 stars -> 1 star -> ... -> 5 stars (stops)
+        less: 5 stars -> ... -> 1 star -> 0 stars -> unrated (stops)
+
+Sync
+----
+
+Sync merges ratings, play counts and last played times.  Each rating
+and play is stamped with the time it was made, and for each song the
+newer write wins.  Unrated is a write like any other: clearing a
+rating on the phone after rating it on the desktop leaves the song
+unrated on both after the sync.  The clocks of both devices should be
+correct.
+
+Other effects
+-------------
+
+  * Removing a song from the library deletes its rating.
+  * Initializing with --replace deletes all ratings.
+  * Changing the music root directory keeps ratings.

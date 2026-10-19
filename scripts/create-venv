@@ -1,0 +1,83 @@
+#!/bin/bash
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Runs under bash or zsh.  Paths are found from the location of this script.
+#
+# Creates the Python virtual environment at ${MILKCRATEVINYL_VENV} and installs
+# desktop/requirements.txt into it.  The other scripts run this when the
+# environment is missing; run it by hand to repair or update one.  If the
+# environment is already there, only the requirements are installed again.
+set -o errexit
+set -o nounset
+set -o pipefail
+here=$(cd "$(dirname "${0}")" && pwd)
+root=$(dirname "${here}")
+# no .pyc files, also in anything Python starts
+export PYTHONDONTWRITEBYTECODE=1
+. "${here}/require-venv"
+music_require_variable
+
+requirements="${root}/desktop/requirements.txt"
+if [ ! -f "${requirements}" ]; then
+    echo "error: ${requirements} is missing." >&2
+    exit 1
+fi
+
+if [ -x "${MILKCRATEVINYL_VENV}/bin/python" ]; then
+    echo "${MILKCRATEVINYL_VENV} already exists;"
+    echo "installing the requirements into it."
+else
+    mkdir -p "$(dirname "${MILKCRATEVINYL_VENV}")"
+    if python3 -c "import ensurepip" 2>/dev/null; then
+        python3 -m venv "${MILKCRATEVINYL_VENV}"
+    else
+        # Some systems ship python3 without ensurepip (Debian: python3-venv):
+        # make the environment without pip and fetch pip from PyPI (its
+        # checksum is checked against the one PyPI publishes).
+        echo "python3 has no ensurepip: creating the environment without pip"
+        echo "and fetching pip from PyPI."
+        python3 -m venv --without-pip "${MILKCRATEVINYL_VENV}"
+        download=$(mktemp -d)
+        trap 'rm -rf "${download}"' EXIT
+        wheel=$(python3 -I -B - "${download}" <<'PY'
+import hashlib
+import json
+import sys
+import time
+import urllib.request
+
+URL = "https://pypi.org/pypi/pip/json"
+last = None
+for _ in range(4):
+    try:
+        info = json.load(urllib.request.urlopen(URL, timeout=30))
+        entry = next(
+            u for u in info["urls"]
+            if u["filename"].endswith("-py3-none-any.whl")
+        )
+        data = urllib.request.urlopen(entry["url"], timeout=60).read()
+        if hashlib.sha256(data).hexdigest() != entry["digests"]["sha256"]:
+            sys.exit("the downloaded pip does not match its checksum")
+        path = sys.argv[1] + "/" + entry["filename"]
+        open(path, "wb").write(data)
+        print(path)
+        break
+    except OSError as e:
+        last = e
+        time.sleep(3)
+else:
+    sys.exit(f"cannot download pip from PyPI: {last}")
+PY
+)
+        PYTHONPATH="${wheel}" "${MILKCRATEVINYL_VENV}/bin/python" -B -m pip \
+            install --quiet pip
+    fi
+fi
+
+"${MILKCRATEVINYL_VENV}/bin/python" -B -m pip install -r "${requirements}"
+echo "The virtual environment at ${MILKCRATEVINYL_VENV} is ready."

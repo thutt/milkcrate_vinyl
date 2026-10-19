@@ -1,0 +1,112 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+PLAYLIST CONTAINERS AND SEQUENCES
+=================================
+
+A playlist plays until it ends.  A container plays one or more
+playlists for a set time, then moves on.  A sequence plays several
+containers in order.
+
+Uses
+----
+
+  * Timed segments: for example 10 minutes of quiet music, 30 minutes
+    of fast music, 10 minutes of quiet music.  Each part is a
+    container and the three are a sequence; play stops at the end.
+  * Background music by the clock: one style for an hour, then another.
+  * A segment built from several playlists, played in order.
+  * Ending a dynamic playlist.  A dynamic playlist refills itself and
+    never ends; a container gives it an end.  A container with a
+    dynamic playlist must have a time limit.
+  * A sleep timer: a container with a 30 minute limit and fade out.
+
+Parts
+-----
+
+  Playlist (static or dynamic)   holds songs
+  Container                      holds playlists, a time limit and an
+                                 end mode
+  Sequence                       holds containers
+
+A container or a sequence can be played.  A container cannot hold a
+container and a sequence cannot hold a sequence.
+
+In the list, a container shows "(10:00, 2 playlists)" and a sequence
+"(3 sections, 50:00)": the limit or total (m:ss or h:mm:ss).  The
+total is omitted if any section has no limit.
+
+Containers and sequences have their own name spaces: a container may
+have the same name as a playlist; two containers may not share a name.
+
+Creating a container
+--------------------
+
+Playlists tab > New container...
+
+  Name                  required
+  Time limit            check the box and set minutes and seconds, at
+                        least one second; unchecked means no limit
+  At the limit          fade out, then go on (default)
+                        cut off, then go on
+                        let the track finish, then go on
+  If the playlists run out
+                        start the playlists again (default)
+                        go on to the next section early
+  Playlists             Add... picks static or dynamic playlists (each
+                        once); Remove, Move up, Move down
+
+Edit... changes a selected container.
+
+Creating a sequence
+-------------------
+
+New sequence...  Enter a name and Add... containers.  A container may
+be added more than once.  Move up and Move down set the order.  At
+least one container is required.  Edit... changes it.
+
+Playing
+-------
+
+In the player, select the container or sequence and click Play.
+Shuffle randomizes the songs within each section.
+
+  * The clock counts only time during which music plays; pausing stops
+    it.
+  * A section's songs are those of its playlists in order (a dynamic
+    playlist contributes its current list).
+  * At the limit:
+      fade    the volume falls to zero over 3 seconds, then the next
+              section starts
+      cut     the music stops and the next section starts
+      finish  the current song ends, then the next section starts
+  * If the songs run out before the limit, the section either starts
+    its playlists again or goes on early, per its setting.
+  * A section with no songs is skipped with a message.
+  * After the last section playback stops ("Sequence complete.").  A
+    container played alone stops when its time is used.
+
+A line shows the section, its position, and the time left:
+
+    Cool down (3/3) - 4:12 left - 4:12 in all
+
+Playback > Next section (Ctrl+Shift+Right) goes to the next section.
+
+Editing a playlist in a container changes what the container plays the
+next time it starts.  Deleting a playlist removes it from containers;
+deleting a container removes it from sequences.
+
+Phone
+-----
+
+The phone lists sequences, containers and playlists in the Playlists
+tab and plays them with the same limits and end modes.  Create and
+edit them on the desktop and sync.
+
+Storage
+-------
+
+A container or sequence is a row in the playlist table with its kind,
+limit, end mode and "when empty" setting.  A container's playlists and
+a sequence's containers are rows in playlist_member, in order.

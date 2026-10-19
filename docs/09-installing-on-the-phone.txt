@@ -1,0 +1,103 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+INSTALLING THE ANDROID VERSION ON A PHONE
+=========================================
+
+Build the APK first (08-building-the-android-version.txt).  For a phone
+it is:
+
+    ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-arm64_v8a.apk
+
+There are two ways to install it.
+
+Method 1: adb over USB
+----------------------
+
+Requires USB debugging on the phone and a cable.  On the phone:
+Settings > About phone > tap Build number seven times, then Settings >
+Developer options > USB debugging.  Connect the cable and accept
+"Allow USB debugging" for this computer.
+
+Use the adb in the BOD:
+
+    ADB=${MILKCRATEVINYL_BOD}/android-dev/android-sdk/platform-tools/adb
+    ${ADB} devices
+    ${ADB} -s SERIAL install -r \
+        ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-arm64_v8a.apk
+
+"devices" must show the phone as "device".  "unauthorized" means the
+prompt on the phone was not accepted.  -r replaces an installed copy
+and keeps its data.  Without -s, adb needs exactly one phone attached.
+
+Do not set ANDROID_USER_HOME when running this adb.  adb keeps the key
+the phone has authorized in ~/.android; another location creates a new
+key and the phone asks for authorization again.
+
+Method 2: copy the file
+-----------------------
+
+Works without USB debugging.
+
+  1. Connect the phone by USB and set USB mode to File transfer (MTP).
+     The phone must be unlocked.
+  2. Copy milkcrate-vinyl-arm64_v8a.apk to a folder on the phone, for
+     example Internal storage/Download.
+  3. On the phone open the file (Files or My Files) and tap it.
+  4. If asked, allow that app to install unknown apps, then tap Install.
+
+On Linux, a file manager that supports MTP, or "gio copy FILE
+mtp://..." works.
+
+Updating
+--------
+
+Installing over an existing copy keeps the app's data.  This works only
+if the new APK is signed with the same key as the installed one (see
+the signing key in 08).  If Android refuses with a signature error, the
+installed copy was signed with another key.  Uninstalling it removes the
+app's own data: its settings, and the library too if the library is in
+the app's own folder.  A library in <SD card>/MusicLibrary is kept.
+
+First run
+---------
+
+The app asks for:
+
+  * Audio files and notifications permission: allow both.
+  * "Allow access to files": an orange banner appears when the library
+    is outside the app's own folder (Android 11 and later).  Tap the
+    button and enable the switch for Milkcrate Vinyl.  Return to the app.
+
+The app looks for its library in this order and uses the first folder
+that contains tags.db:
+
+  1. the folder in MILKCRATEVINYL_LIBRARY (testing only)
+  2. <SD card>/MusicLibrary
+  3. /storage/emulated/0/MusicLibrary
+
+If none exists, the app uses its own folder (on the SD card if there is
+one) and shows an empty song list.  To fill the library see
+11-getting-the-library-onto-the-phone.txt.
+
+The database and music folder in use are shown in Settings (the "..."
+button in the top bar).  They can be changed there: enter the path of
+tags.db and of the music folder and tap Load library.
+
+Emulator
+--------
+
+The x86_64 APK installs on the emulator (scripts/run-emulator) with the
+BOD's adb:
+
+    ${ADB} -s emulator-5554 install -r \
+        ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-x86_64.apk
+
+Removing the app
+----------------
+
+    ${ADB} -s SERIAL uninstall org.musicplayer.player
+
+or uninstall from the phone's app settings.  A library in
+<SD card>/MusicLibrary is kept; one in the app's own folder is removed.

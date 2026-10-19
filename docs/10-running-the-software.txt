@@ -1,0 +1,133 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+RUNNING THE SOFTWARE
+====================
+
+Source scripts/setup first (01-configuring-the-shell.txt) and create the
+database (02-creating-a-database.txt).  The scripts run from any
+directory and create the virtual environment on first use.
+
+Scripts
+-------
+
+    scripts/play                          desktop player
+    scripts/edit-database                 database editor (03)
+    scripts/initialize-database --root DIR   create the database (02)
+    scripts/change-music-root-directory --root DIR
+                                          point the database at a moved
+                                          music folder
+    scripts/sync-phone                    sync with a phone (11)
+    scripts/build-for-android [target]    build the phone app (08)
+    scripts/setup-android-tools           install the Android tools (08)
+    scripts/run-emulator                  start the Android emulator (08)
+    scripts/create-venv                   create or update the virtual
+                                          environment
+    scripts/test-acoustid                 test the AcoustID lookup
+
+The scripts that use the database take --database FILE (-d FILE) and
+otherwise use MILKCRATEVINYL_DATABASE.  Other arguments are passed on to
+the program.
+
+Close the player and the editor before a phone sync: they keep the
+database in memory and would overwrite the merged result.
+
+Player
+------
+
+    scripts/play [--database FILE]
+
+The window shows the library as a table, one row per song; duplicates
+are hidden unless View > Show duplicates is on.  The right side has two
+tabs: Tags (the tag editor, 03) and Playlists (04 to 06).
+
+Playing:
+
+  * Double-click a song, or select it and press Enter.  Playback
+    continues down the list as sorted and filtered.
+  * Right-click songs > Add N tracks to playlist.
+  * Select a playlist, container or sequence in the Playlists tab and
+    use Play or Shuffle.
+
+Playback menu:
+
+    Play / Pause       Ctrl+Space
+    Next               Ctrl+Right
+    Previous           Ctrl+Left    (restarts the song after 3 seconds)
+    Stop               Ctrl+.
+    Next section       Ctrl+Shift+Right
+    Random order       Ctrl+R
+    Find               Ctrl+F
+
+With Random order on, no song repeats until every song in the list has
+played.
+
+Searching.  The search box filters the table.  Every word typed must
+match.
+
+    dio              a word starting with "dio" (Dio, Dion; not Audio)
+    =dio             the whole word dio
+    "the wall"       a phrase
+    artist:dio       only in one field: title, artist, album, genre,
+                     composer, path
+
+Without a field, the title, artist (also album artist), album, genre,
+composer and path are searched.
+
+Rating.  Rating menu, Rating column, and the stars next to the playing
+song's name (07).  A song counts as played after 20 seconds of
+listening, which increases its play count and sets its last played
+time.
+
+View menu:
+
+  * Show duplicates.
+  * Columns...: choose and order the columns.  Column order, widths and
+    window size are remembered between runs.
+  * Volume leveling: Off, Track (each song to the target loudness) or
+    Album (keeps loudness differences within an album); Target
+    loudness... sets the target in LUFS.  Leveling uses loudness values
+    stored in the database; songs without one are not adjusted.
+
+File menu: Open Database..., Save Tags, Sync with Phone..., Quit.
+Tag edits are stored by Save Tags and changes only the database.
+
+Editor
+------
+
+    scripts/edit-database [--database FILE]
+
+See 03-editing-the-database.txt.
+
+Moved music folder
+------------------
+
+    scripts/change-music-root-directory --root NEW_DIR
+
+The database stores the music folder and the path of each song relative
+to it.  If the folder moves, run this with the new location.  It counts
+how many database songs exist under NEW_DIR and refuses if there are
+none, makes a backup of the database (FILE.bak-before-change-music-root)
+and changes the stored folder.  The paths of the songs do not change.
+
+Data and settings
+-----------------
+
+  * Database: the file given by --database or MILKCRATEVINYL_DATABASE.
+  * Backups and journals: next to the database.
+  * Window layout and columns: stored by Qt in the user's configuration
+    (~/.config).
+  * Nothing is written to the project directory.
+
+Errors
+------
+
+  "no such database (create it with scripts/initialize-database)"
+      The database file does not exist.
+  "Missing file: <path>" in the player
+      A song is in the database but not on disk; check the stored
+      music folder (change-music-root-directory).
+  "no database: --database was not given and MILKCRATEVINYL_DATABASE is
+  not set"
+      Source scripts/setup or give --database.

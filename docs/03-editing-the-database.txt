@@ -1,0 +1,184 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+EDITING THE DATABASE
+====================
+
+    scripts/edit-database [--database FILE]
+
+The database is the one given to scripts/setup unless --database (-d)
+is given.
+
+The music files are not modified
+--------------------------------
+
+The editor changes the database only.  It never writes to the music
+files: not for tag edits, renames, ratings, duplicate marks or
+removing files from the library.
+
+After the database is created (02-creating-a-database.txt) it is the
+master copy of the tags:
+
+  * The player and the phone app read tags from the database, not from
+    the files.
+  * A change made to a file's tags by another program is not seen.
+  * Ratings, play counts, duplicate marks and playlists exist only in
+    the database.
+
+Window
+------
+
+Left side, four tabs:
+
+  Files       folders and files, with columns for the main tags,
+              rating, plays, last played, format, duplicate mark and
+              missing standard tags.  Click a heading to sort;
+              right-click it to choose columns.
+  Tags        every tag name and its values.
+  Duplicates  songs marked as duplicates of one another.
+  Playlists   see 04 to 06.
+
+Right side: the tag editor for the selected files.
+
+Select files, or folders (a folder stands for the files in it).  The
+tag editor shows one row per tag:
+
+    Tag      Value                Files
+    GENRE    Jazz; Hard Bop       3 of 5
+
+  * If the selected files that have the tag agree, the value is shown.
+  * If they differ, "<multiple values>" is shown.  Typing a value
+    replaces it in all selected files.
+  * "Files" shows how many of the selected files have the tag, when
+    not all do.
+
+Finding files
+-------------
+
+  * The search box matches files whose path or tag values contain
+    every word typed.
+  * "Only files missing standard tags" lists files that lack Title,
+    Artist, Album, Genre, Tracknumber or Date (the checked ones).  A
+    tag with only blank values counts as missing.
+
+Editing
+-------
+
+  1. Select files.
+  2. Double-click a value, type, press Enter.  The row turns bold.
+  3. Click Save (Ctrl+S).
+
+Revert discards unsaved edits.  Selecting other files with unsaved
+edits asks to Save, Discard or Cancel.  The title bar shows * while
+edits are unsaved.
+
+  * An emptied value removes the tag.
+  * Remove Tag (or Delete) marks the selected rows for removal (shown
+    struck through); repeating it restores them.
+  * Add Tag adds a row: type the name (made upper case; no "=" or line
+    break), then the value.
+  * A tag with 1 to 300 distinct values in the library is edited with a
+    combo box of those values; a new value can be typed.
+  * TRACKNUMBER is stored as an integer ("3/12" becomes 3).
+
+Multiple values
+---------------
+
+A tag can have several values in one file.  They are stored separately,
+in order, and shown joined by "; ":
+
+    GENRE    Rock; Blues
+
+To set several values, type them separated by ";":
+
+    Rock; Blues
+
+On Enter the text is split at ";", the parts are trimmed, empty parts
+are dropped, and repeated values are kept once.
+
+";" splits only in a tag that takes several values.  A tag does if
+any of these is true:
+
+  1. It is ARTIST, ALBUMARTIST, GENRE, SUBGENRE, STYLE or COMPOSER.
+  2. A selected file already has several values for it.
+  3. It has a pick list (see above).
+
+In any other tag the text is one value.  A value box that splits shows
+the tip "Several values: separate them with ';'".
+
+Add Value and Remove Value change one value in every selected file and
+keep the other values:
+
+  1. Select files.
+  2. Select an existing tag row.
+  3. Click Add Value... or Remove Value... (or use the row's
+     right-click menu).
+
+  * Add Value appends the value to each file that lacks it.  Adding
+    "Blues" to GENRE: "Rock" becomes "Rock; Blues"; "Blues" is
+    unchanged.  In a list tag, "A; B" adds two values.
+  * Remove Value lists the values in the selection with file counts and
+    removes the chosen one from each file that has it.
+
+Both ask for confirmation, naming how many files change, and are stored
+at once without Save.  Unsaved edits are first saved or discarded.
+
+Tags tab
+--------
+
+Lists each tag with its values, the number of files with each value, and
+the number of spellings that could be unified.  Selecting a value
+selects its files in the Files tab.
+
+To change a value in all files, double-click it, type the new text,
+and press Enter.  After confirmation it is stored at once.  In a list
+tag, "A; B" splits the value into two.
+
+Filters:
+
+  * Only variant spellings: values that differ only in spelling or
+    case, such as "A and his orchestra" and "A & His Orchestra".
+  * Only lists to split: values of list tags that contain "," or "/",
+    which are usually several values.  Rename each using "; " between
+    the parts.
+
+Saving
+------
+
+Save stores the edits for the selected files.  Add Value, Remove Value,
+Tags-tab renames and ratings are stored immediately.  There is no
+undo except Revert before saving.  Back up the database file before
+large changes.  Scan for New Files and Remove from library make a
+backup and a journal and report their paths.
+
+Ratings
+-------
+
+Select files and use the Rating menu or right-click > Rate.  See
+07-song-rating.txt.  Rating more than 25 files asks first.
+
+Duplicates
+----------
+
+The Duplicates tab lists groups of songs with the same artist and
+title.  One file in each group is the primary; the others are marked as
+its duplicates.
+
+  Make primary          make the selected duplicate the primary
+  Undo duplicate mark   clear the mark of the selected duplicates; on a
+                        primary, clear the whole group
+
+Marks exist only in the database.
+
+Adding and removing files
+-------------------------
+
+  * File > Scan for New Files... adds files that are new in the music
+    folder, and handles removed ones.
+  * Right-click files > Remove N files from library... deletes them,
+    with their tags, plays, ratings and playlist entries, from the
+    database.  The files on disk stay, and a later scan lists them as
+    new if they are still in the music folder.
+
+File > Sync with Phone... merges plays and ratings from the phone.

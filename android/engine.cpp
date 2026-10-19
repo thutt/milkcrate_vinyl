@@ -1,0 +1,674 @@
+// Copyright (c) 2026 Logic Magicians Software
+// SPDX-License-Identifier: GPL-3.0-only
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License version 3 as published
+// by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+// see the file LICENSE for the license text.
+#include "engine.h"
+#include "dblock.h"
+#include "dynamic.h"
+#include <QThreadPool>
+#include <QTimer>
+
+#include <QDateTime>
+#include <QFileInfo>
+#include <QMutexLocker>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
+#include <QUuid>
+#include <QRandomGenerator>
+#include <QUrl>
+#include <algorithm>
+#include <cmath>
+
+#ifdef Q_OS_ANDROID
+#include <QCoreApplication>
+#include <QJniEnvironment>
+#include <QJniObject>
+#endif
+
+void Engine::init() {
+    m_player = new QMediaPlayer(this);
+    m_audio = new QAudioOutput(this);
+    m_player->setAudioOutput(m_audio);
+    applyVolume();
+    m_clock = new QTimer(this);
+    m_clock->setInterval(250);
+    connect(m_clock, &QTimer::timeout, this, &Engine::clockTick);
+    connect(m_player, &QMediaPlayer::positionChanged, this,
+            [this](qint64 p) { position = p; });
+    connect(m_player, &QMediaPlayer::durationChanged, this,
+            [this](qint64 d) { duration = d; });
+    connect(m_player, &QMediaPlayer::playbackStateChanged, this,
+            [this](QMediaPlayer::PlaybackState) {
+                bool on =
+                    m_player->playbackState() == QMediaPlayer::PlayingState;
+                playing = on;
+                if (m_player->playbackState() == QMediaPlayer::StoppedState)
+                    finishTrack();
+                if (on) {
+                    m_lastTick.restart();
+                    m_clock->start();
+                } else
+                    m_clock->stop();  // the clock runs only while music plays
+                emit playingChanged(on);
+                pushState();
+            });
+    connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
+            [this](QMediaPlayer::MediaStatus s) {
+                if (s == QMediaPlayer::EndOfMedia) next();
+            });
+    connect(m_player, &QMediaPlayer::errorOccurred, this,
+            [this](QMediaPlayer::Error, const QString &text) {
+                emit message("Cannot play: " + text);
+            });
+}
+
+// The slider sets the volume; leveling scales it by the difference between the
+// target and the track's loudness (the output cannot go above full).
+void Engine::applyVolume() {
+    double gain = (m_leveling && m_measured) ? m_target - m_loudness : 0.0;
+    m_audio->setVolume(
+        std::min(1.0, m_volume * m_fade * std::pow(10.0, gain / 20.0)));
+}
+
+void Engine::setVolume(double volume, double target, bool leveling) {
+    m_volume = volume;
+    m_target = target;
+    m_leveling = leveling;
+    applyVolume();
+}
+
+// The play order: the queue as it is, or shuffled with the current track first
+// (every track once per round).
+void Engine::buildOrder(int startRow, bool keepFirst) {
+    m_order = m_queue;
+    if (m_order.isEmpty()) {
+        m_pos = -1;
+        return;
+    }
+    if (!m_shuffle) {
+        m_pos = std::clamp(startRow, 0, int(m_order.size()) - 1);
+        return;
+    }
+    qint64 first = (keepFirst || startRow >= 0) && startRow < m_queue.size()
+                       ? m_queue[std::max(startRow, 0)].id
+                       : -1;
+    std::shuffle(m_order.begin(), m_order.end(), *QRandomGenerator::global());
+    if (first >= 0) {
+        auto it =
+            std::find_if(m_order.begin(), m_order.end(),
+                         [first](const QueueItem &q) { return q.id == first; });
+        if (it != m_order.end()) std::rotate(m_order.begin(), it, it + 1);
+    }
+    m_pos = 0;
+}
+
+void Engine::playQueue(const QVector<QueueItem> &items, int row, bool shuffle) {
+    if (row < 0 || row >= items.size()) return;
+    endSchedule();
+    m_queue = items;
+    m_shuffle = shuffle;
+    buildOrder(row, true);
+    playCurrent();
+}
+
+void Engine::setShuffle(bool on) {
+    if (on == m_shuffle) return;
+    m_shuffle = on;
+    if (m_queue.isEmpty()) return;
+    int row = 0;
+    for (int i = 0; i < m_queue.size(); ++i)
+        if (m_queue[i].id == m_currentId) {
+            row = i;
+            break;
+        }
+    buildOrder(row, true);
+}
+
+void Engine::playCurrent() {
+    if (m_pos < 0 || m_pos >= m_order.size()) return;
+    const QueueItem &t = m_order[m_pos];
+    finishTrack();
+    if (m_currentId >= 0 && m_currentId != t.id && m_skippable && !m_counted &&
+        !m_skipped.contains(m_currentId))
+        m_skipped.append(m_currentId);  // left before it counted: a skip, which
+                                        // takes effect later
+    m_skipped.removeAll(t.id);  // back to a skipped song: the skip is cancelled
+    m_skippable = true;
+    m_currentId = t.id;
+    m_heard = 0;
+    m_counted = false;
+    m_title = t.title;
+    m_artist = t.artist;
+    m_measured = t.measured;
+    m_loudness = t.loudness;
+    applyVolume();
+    emit current(t.id, t.title, t.artist, t.album);
+    m_rating = -1;
+    readRating(t.id);
+    QString full = m_root + "/" + cleanPath(t.path);
+    if (!QFileInfo::exists(full)) {
+        m_player->stop();
+        m_player->setSource({});
+        QString up = full;  // the deepest part of the path that exists
+        while (up.size() > 1 && !QFileInfo::exists(up))
+            up.truncate(up.lastIndexOf('/'));
+        emit message("Not on this device: " + full + "\nFound up to: " + up);
+        return;  // stay on this track so the message stays readable
+    }
+    emit message({});
+    m_player->setSource(QUrl::fromLocalFile(full));
+    m_player->play();
+}
+
+void Engine::resume() {
+    if (m_currentId >= 0 &&
+        m_player->playbackState() != QMediaPlayer::PlayingState)
+        toggle();
+}
+
+void Engine::toggle() {
+    if (m_currentId < 0) return;
+    if (m_player->playbackState() == QMediaPlayer::PlayingState) {
+        m_player->pause();
+        return;
+    }
+    if (m_player->source().isEmpty() ||
+        m_player->mediaStatus() == QMediaPlayer::NoMedia ||
+        m_player->mediaStatus() == QMediaPlayer::InvalidMedia) {
+        playCurrent();
+        return;
+    }
+    m_player->play();
+}
+
+void Engine::next() {
+    if (m_order.isEmpty()) return;
+    if (m_section >= 0 && scheduleNext()) return;
+    if (m_pos + 1 < m_order.size())
+        ++m_pos;
+    else if (m_shuffle)
+        buildOrder(-1, false);  // a new round
+    else {
+        m_skippable = false;
+        m_player->stop();
+        stopService();
+        return;
+    }  // end of the queue
+    playCurrent();
+}
+
+void Engine::previous() {
+    if (m_order.isEmpty()) return;
+    if (m_player->position() > 3000 || m_pos == 0) {
+        m_player->setPosition(0);
+        return;
+    }
+    --m_pos;
+    playCurrent();
+}
+
+void Engine::seek(qint64 ms) {
+    m_player->setPosition(ms);
+    pushState();
+}
+
+// Commands from PlaybackService (what: 0 play, 1 pause, 2 next, 3 previous, 4
+// stop, 5 seek, 6 one star less (0 stars: unrated), 7 one star more (unrated: 0
+// stars)).
+void Engine::handleCommand(int what, qint64 argument) {
+    enum { Play, Pause, Next, Previous, Stop, Seek, StarDown, StarUp };
+    bool on = m_player->playbackState() == QMediaPlayer::PlayingState;
+    switch (what) {
+        case Play:
+            if (!on) toggle();
+            break;
+        case Pause:
+            if (on) m_player->pause();
+            break;
+        case Next: next(); break;
+        case Previous: previous(); break;
+        case Stop:
+            endSchedule();
+            m_skippable = false;
+            m_player->stop();
+            stopService();
+            break;
+        case Seek: seek(argument); break;
+        case StarDown:
+            if (m_currentId >= 0 && m_rating >= 0)
+                setRating(m_currentId, m_rating - 1);
+            break;  // 1 star becomes 0 stars, 0 stars becomes unrated
+        case StarUp:
+            if (m_currentId >= 0 && m_rating < 5)
+                setRating(m_currentId, m_rating + 1);
+            break;  // unrated becomes 0 stars
+    }
+}
+
+// The background service shows the track and the play state in the notification
+// and on the lock screen.
+void Engine::pushState() {
+#ifdef Q_OS_ANDROID
+    if (m_currentId < 0 ||
+        m_player->playbackState() == QMediaPlayer::StoppedState)
+        return;
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/PlaybackService", "update",
+        "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;ZJJI)V",
+        context.object(), QJniObject::fromString(m_title).object<jstring>(),
+        QJniObject::fromString(m_artist).object<jstring>(),
+        jboolean(m_player->playbackState() == QMediaPlayer::PlayingState),
+        jlong(m_player->position()), jlong(m_player->duration()),
+        jint(m_rating));
+#endif
+}
+
+void Engine::stopService() {
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/PlaybackService", "stop",
+        "(Landroid/content/Context;)V",
+        QNativeInterface::QAndroidApplication::context().object());
+#endif
+}
+
+// -- containers and sequences (see file-tags/containers.py, which plays the
+// same way on the desktop) --
+
+void Engine::playSections(const QVector<Section> &sections, bool shuffle) {
+    endSchedule();
+    if (sections.isEmpty()) {
+        emit message("Nothing to play: it has no containers.");
+        return;
+    }
+    m_sections = sections;
+    m_sectionCount = sections.size();
+    m_shuffle = shuffle;
+    m_section = 0;
+    startSection();
+}
+
+// Begin the current section: its tracks, a fresh clock, full volume.  Sections
+// without tracks are skipped.
+void Engine::startSection() {
+    while (m_section >= 0 && m_section < m_sections.size()) {
+        const Section &s = m_sections[m_section];
+        if (!s.items.isEmpty()) {
+            m_queue = s.items;
+            m_elapsed = 0;
+            m_pending = false;
+            if (m_fade != 1.0) {
+                m_fade = 1.0;
+                applyVolume();
+            }
+            {
+                QMutexLocker lock(&m_textLock);
+                m_sectionName = s.name;
+            }
+            m_sectionIndex = m_section;
+            m_sectionRemaining = s.limitMs;
+            qint64 total = s.limitMs;
+            for (int i = m_section + 1; i < m_sections.size() && total >= 0;
+                 ++i)
+                total = m_sections[i].limitMs < 0
+                            ? -1
+                            : total + m_sections[i].limitMs;
+            m_totalRemaining = total;
+            m_lastTick.restart();
+            buildOrder(m_shuffle ? int(QRandomGenerator::global()->bounded(
+                                       quint32(m_queue.size())))
+                                 : 0,
+                       true);
+            playCurrent();
+            return;
+        }
+        ++m_section;
+    }
+    endSchedule();
+    m_skippable = false;  // stopped, not skipped
+    m_player->stop();
+    stopService();
+    emit message("Nothing to play.");
+}
+
+void Engine::advanceSection() {
+    if (m_section < 0) return;
+    ++m_section;
+    if (m_section < m_sections.size()) {
+        startSection();
+        return;
+    }
+    endSchedule();
+    m_skippable = false;  // stopped, not skipped
+    m_player->stop();
+    stopService();
+    emit message("Sequence complete.");
+}
+
+void Engine::nextSection() {
+    if (m_section >= 0) advanceSection();
+}
+
+void Engine::endSchedule(const QString &) {
+    m_section = -1;
+    m_sections.clear();
+    m_sectionCount = 0;
+    m_pending = false;
+    if (m_fade != 1.0) {
+        m_fade = 1.0;
+        if (m_audio) applyVolume();
+    }
+}
+
+// The track ended or Next was pressed: true if the schedule moved on (next
+// section, or the section's lists again).
+bool Engine::scheduleNext() {
+    if (m_pending) {
+        advanceSection();
+        return true;
+    }  // "finish": the limit passed and this track is over
+    if (m_pos + 1 < m_order.size()) return false;  // more tracks in this round
+    if (m_sections[m_section].whenEmpty == "next") {
+        advanceSection();
+        return true;
+    }
+    buildOrder(m_shuffle ? int(QRandomGenerator::global()->bounded(
+                               quint32(m_queue.size())))
+                         : 0,
+               true);
+    playCurrent();  // "repeat": the section's lists again
+    return true;
+}
+
+// Every 250 ms: count the time that was played, fade out near the limit, move
+// on when it is reached.
+void Engine::clockTick() {
+    qint64 dt = std::min<qint64>(m_lastTick.restart(), 1000);
+    if (!playing) return;
+    m_heard += dt;
+    if (!m_counted && m_heard >= 20000 && m_currentId >= 0) {
+        m_counted = true;
+        countPlay();
+        commitSkips();
+    }
+    if (m_section < 0) return;
+    m_elapsed += dt;
+    const Section &s = m_sections[m_section];
+    qint64 remaining =
+        s.limitMs < 0 ? -1 : std::max<qint64>(0, s.limitMs - m_elapsed);
+    m_sectionRemaining = remaining;
+    if (m_totalRemaining >= 0) {
+        qint64 later = 0;
+        for (int i = m_section + 1; i < m_sections.size(); ++i)
+            later += m_sections[i].limitMs;
+        m_totalRemaining = remaining + later;
+    }
+    if (s.limitMs < 0 || m_pending) return;
+    if (remaining <= 0) {
+        if (s.endMode == "finish")
+            m_pending = true;
+        else
+            advanceSection();
+        return;
+    }
+    double fade =
+        (s.endMode == "fade" && remaining < 3000) ? remaining / 3000.0 : 1.0;
+    if (fade != m_fade) {
+        m_fade = fade;
+        applyVolume();
+    }
+}
+
+QString Engine::sectionText() const {
+    int count = m_sectionCount;
+    if (count == 0) return {};
+    QString name;
+    {
+        QMutexLocker lock(&m_textLock);
+        name = m_sectionName;
+    }
+    qint64 remaining = m_sectionRemaining, total = m_totalRemaining;
+    QString text =
+        QString("%1 (%2/%3)").arg(name).arg(m_sectionIndex + 1).arg(count);
+    text += remaining < 0 ? " — no limit"
+                          : " — " + formatClock(remaining) + " left";
+    if (count > 1 && total >= 0) text += " — " + formatClock(total) + " in all";
+    return text;
+}
+
+// A play counts after 20 s of listening (as on the desktop): the track's play
+// count and last-played time are written to tags.db (stats_modified says when,
+// so the sync keeps the newer write).  The track stays on its dynamic playlists
+// until it ends or is left (finishTrack).  Own short-lived connection, rollback
+// journal: no write-ahead log on the card.
+void Engine::countPlay() {
+    if (m_dbPath.isEmpty()) return;
+    QMutexLocker lock(
+        &dbLock());  // the sync server may be replacing the database
+    const QString name = "play-" + QUuid::createUuid().toString(QUuid::Id128);
+    QString problem;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db.setDatabaseName(m_dbPath);
+        db.setConnectOptions("QSQLITE_BUSY_TIMEOUT=3000");
+        if (!db.open()) {
+            problem = db.lastError().text();
+        } else {
+            QSqlQuery q(db);
+            auto hasColumn = [&q](const QString &table, const QString &column) {
+                q.exec("PRAGMA table_info(" + table + ")");
+                while (q.next())
+                    if (q.value(1).toString() == column) return true;
+                return false;
+            };
+            if (!hasColumn("media_file", "stats_modified") ||
+                !hasColumn("playlist_item", "removed_at")) {
+                problem = "The database is from an older version: sync with "
+                          "the desktop to record plays.";
+            } else {
+                const QDateTime now = QDateTime::currentDateTimeUtc();
+                const QString stamp = now.toString("yyyy-MM-ddTHH:mm:ss.zzzZ"),
+                              last = now.toString("yyyy-MM-ddTHH:mm:ssZ");
+                q.exec("PRAGMA journal_mode = DELETE");
+                q.exec("PRAGMA synchronous = FULL");
+                bool ok = db.transaction();
+                q.prepare("UPDATE media_file SET play_count = play_count + 1, "
+                          "last_played = ?, stats_modified = ? WHERE id = ?");
+                q.addBindValue(last);
+                q.addBindValue(stamp);
+                q.addBindValue(m_currentId);
+                ok = ok && q.exec();
+                if (ok) ok = db.commit();
+                if (!ok) {
+                    problem =
+                        "Cannot record the play: " +
+                        (q.lastError().text().isEmpty() ? db.lastError().text()
+                                                        : q.lastError().text());
+                    db.rollback();
+                }
+            }
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(name);
+    if (!problem.isEmpty()) {
+        emit message(problem);
+        return;
+    }
+    ++dbGeneration();
+    m_unmarkedId = m_currentId;
+    emit playCounted();
+}
+
+// The rating of a track (library data, kept in tags.db beside the play count):
+// read when it starts, written when the user taps the stars.  The write is
+// stamped like a play, so a sync keeps the newer of the phone's and the
+// desktop's rating.
+void Engine::readRating(qint64 id) {
+    if (m_dbPath.isEmpty()) return;
+    int rating = -1;
+    {
+        QMutexLocker lock(&dbLock());
+        const QString name =
+            "rating-" + QUuid::createUuid().toString(QUuid::Id128);
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+            db.setDatabaseName(m_dbPath);
+            db.setConnectOptions(
+                "QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
+            if (db.open()) {
+                QSqlQuery q(db);
+                q.prepare("SELECT rating FROM media_file WHERE id = ?");
+                q.addBindValue(id);
+                if (q.exec() && q.next() && !q.value(0).isNull())
+                    rating = q.value(0).toInt();
+                db.close();
+            }
+        }
+        QSqlDatabase::removeDatabase(name);
+    }
+    if (id == m_currentId) m_rating = rating;
+    emit ratingKnown(id, rating);
+}
+
+void Engine::setRating(qint64 id, int rating) {
+    if (m_dbPath.isEmpty() || id < 0) return;
+    QMutexLocker lock(&dbLock());
+    const QString name = "rate-" + QUuid::createUuid().toString(QUuid::Id128);
+    QString problem;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db.setDatabaseName(m_dbPath);
+        db.setConnectOptions("QSQLITE_BUSY_TIMEOUT=3000");
+        if (!db.open()) {
+            problem = db.lastError().text();
+        } else {
+            QSqlQuery q(db);
+            q.exec("PRAGMA table_info(media_file)");
+            bool stamped = false;
+            while (q.next())
+                if (q.value(1).toString() == "stats_modified") stamped = true;
+            if (!stamped) {
+                problem = "The database is from an older version: sync with "
+                          "the desktop to rate tracks.";
+            } else {
+                q.exec("PRAGMA journal_mode = DELETE");
+                q.exec("PRAGMA synchronous = FULL");
+                q.prepare("UPDATE media_file SET rating = ?, stats_modified = "
+                          "? WHERE id = ?");
+                q.addBindValue(rating < 0 ? QVariant() : QVariant(rating));
+                q.addBindValue(QDateTime::currentDateTimeUtc().toString(
+                    "yyyy-MM-ddTHH:mm:ss.zzzZ"));
+                q.addBindValue(id);
+                if (!q.exec())
+                    problem = "Cannot save the rating: " + q.lastError().text();
+            }
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(name);
+    if (!problem.isEmpty()) {
+        emit message(problem);
+        return;
+    }
+    ++dbGeneration();
+    if (id == m_currentId) {
+        m_rating = rating;
+        pushState();
+    }  // the notification shows the stars
+    emit ratingKnown(id, rating);
+}
+
+// The counted track has ended or been left: mark it as played in every dynamic
+// playlist that holds it (the desktop removes it and adds a replacement at the
+// next sync) and take it off the lists on the screen.
+void Engine::finishTrack() {
+    if (m_unmarkedId < 0) return;
+    const qint64 id = m_unmarkedId;
+    m_unmarkedId = -1;
+    markPlayed({id});
+}
+
+// Songs that were skipped (left before they counted as played) go off the
+// dynamic playlists only once the listener has settled on a song, i.e. when a
+// later one counts as played; going back to a skipped song before that cancels
+// the skip.
+void Engine::commitSkips() {
+    if (m_skipped.isEmpty() || m_unmarkedId != m_currentId)
+        return;  // the song that counted must have been written
+    const QVector<qint64> ids = m_skipped;
+    m_skipped.clear();
+    markPlayed(ids);
+}
+
+void Engine::markPlayed(const QVector<qint64> &ids) {
+    QMutexLocker lock(&dbLock());
+    const QString name = "mark-" + QUuid::createUuid().toString(QUuid::Id128);
+    QString problem;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db.setDatabaseName(m_dbPath);
+        db.setConnectOptions("QSQLITE_BUSY_TIMEOUT=3000");
+        if (!db.open()) {
+            problem = db.lastError().text();
+        } else {
+            QSqlQuery q(db);
+            q.exec("PRAGMA journal_mode = DELETE");
+            q.exec("PRAGMA synchronous = FULL");
+            const QString stamp = QDateTime::currentDateTimeUtc().toString(
+                "yyyy-MM-ddTHH:mm:ss.zzzZ");
+            db.transaction();
+            for (qint64 id : ids) {
+                q.prepare(
+                    "UPDATE playlist_item SET removed_at = ? WHERE file_id = ? "
+                    "AND removed_at IS NULL AND playlist_id IN "
+                    "(SELECT id FROM playlist WHERE rules IS NOT NULL)");
+                q.addBindValue(stamp);
+                q.addBindValue(id);
+                if (!q.exec()) {
+                    problem = "Cannot mark the track as played: " +
+                              q.lastError().text();
+                    break;
+                }
+            }
+            if (problem.isEmpty() && !db.commit())
+                problem =
+                    "Cannot mark the track as played: " + db.lastError().text();
+            if (!problem.isEmpty()) db.rollback();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(name);
+    if (!problem.isEmpty()) {
+        emit message(problem);
+        return;
+    }
+    ++dbGeneration();
+    emit playCounted();
+    refillLists();
+}
+
+void Engine::setDatabase(const QString &path) {
+    m_dbPath = path;
+    QTimer::singleShot(4000, this, [this] { refillLists(); });
+}
+
+// Dynamic playlists that have fewer entries than their length (a played track
+// has just left) are topped up from their rules, in a thread of their own:
+// choosing among thousands of tracks takes a moment.  The desktop's refill
+// replaces these entries at the next sync.
+void Engine::refillLists() {
+    if (m_dbPath.isEmpty()) return;
+    QThreadPool::globalInstance()->start([this, path = m_dbPath] {
+        QString problem;
+        const int changed = topUpDynamicPlaylists(path, &problem);
+        if (!problem.isEmpty())
+            emit message(problem);
+        else if (changed)
+            emit playCounted();  // the lists on the screen are read again
+    });
+}

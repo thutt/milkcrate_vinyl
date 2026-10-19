@@ -1,0 +1,46 @@
+#!/bin/bash
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Runs under bash or zsh.  Paths are found from the location of this script.
+#
+# Starts the emulator's virtual device "a16" (Android 36, no window, no sound)
+# from the tools in ${MILKCRATEVINYL_BOD}/android-dev, which are installed (by
+# scripts/setup-android-tools) when missing.  It runs until stopped, so start
+# it in the background.  Install an APK built for x86_64 with adb from
+# ${MILKCRATEVINYL_BOD}/android-dev/android-sdk/platform-tools.
+set -o errexit
+set -o nounset
+set -o pipefail
+here=$(cd "$(dirname "${0}")" && pwd)
+. "${here}/require-venv"
+music_require_venv
+music_require_bod
+
+bod=$(realpath -m -- "${MILKCRATEVINYL_BOD}")
+tools="${bod}/android-dev"
+sdk="${tools}/android-sdk"
+if [ ! -x "${sdk}/emulator/emulator" ] \
+        || [ ! -d "${bod}/android-user/avd/a16.avd" ]; then
+    echo "The emulator is not installed in ${tools}." >&2
+    echo "Downloading the tools (several GB, network access needed);" >&2
+    echo "please wait.  This happens only when they are not installed." >&2
+    "${here}/setup-android-tools"
+    if [ ! -x "${sdk}/emulator/emulator" ] \
+            || [ ! -d "${bod}/android-user/avd/a16.avd" ]; then
+        echo "error: the emulator is still missing after installing." >&2
+        exit 1
+    fi
+fi
+export ANDROID_SDK_ROOT="${sdk}"
+export ANDROID_HOME="${sdk}"
+export ANDROID_USER_HOME="${bod}/android-user"
+export ANDROID_AVD_HOME="${ANDROID_USER_HOME}/avd"
+export ANDROID_EMULATOR_HOME="${ANDROID_USER_HOME}"
+export PATH="${sdk}/platform-tools:${PATH}"
+exec "${sdk}/emulator/emulator" -avd a16 -no-window -no-audio -no-snapshot \
+    -gpu swiftshader_indirect "${@}"

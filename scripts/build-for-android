@@ -1,0 +1,139 @@
+#!/bin/bash
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Runs under bash or zsh.  Paths are found from the location of this script.
+#
+# Builds the music player in android/: an APK for a phone (arm64_v8a, the
+# default) or the emulator (x86_64), or "desktop" for a Qt build that runs on
+# this computer:
+#
+#     scripts/build-for-android [arm64_v8a|x86_64|desktop]
+#
+# MILKCRATEVINYL_BOD (set by scripts/setup --bod) is the build output directory
+# (BOD) and is required.  Everything the build produces goes there: the build
+# trees in ${MILKCRATEVINYL_BOD}/<target>/ and the signed APK as
+# ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-<target>.apk.  The tools it uses are in
+# ${MILKCRATEVINYL_BOD}/android-dev (installed by this script when missing, with
+# scripts/setup-android-tools) and Gradle's cache in
+# ${MILKCRATEVINYL_BOD}/gradle.
+# The source directories, and the rest of the home directory, are never
+# written to, so the BOD may not be inside the project.
+set -o errexit
+set -o nounset
+set -o pipefail
+here=$(cd "$(dirname "${0}")" && pwd)
+root=$(dirname "${here}")
+source_dir="${root}/android"
+. "${here}/require-venv"
+music_require_bod
+
+target=${1:-arm64_v8a}
+bod=$(realpath -m -- "${MILKCRATEVINYL_BOD}")
+project=$(realpath -- "${root}")
+case "${bod}/" in
+    "${project}/"*)
+        echo "error: MILKCRATEVINYL_BOD=${bod} is inside the project" >&2
+        echo "(${project})." >&2
+        echo "The source directories are never written to: use a directory" >&2
+        echo "outside the project." >&2
+        exit 1
+        ;;
+esac
+
+tools="${bod}/android-dev"
+qt="${tools}/Qt/6.8.3"
+sdk="${tools}/android-sdk"
+if [ "${target}" = "desktop" ]; then
+    qt_target="gcc_64"
+else
+    qt_target="android_${target}"
+fi
+# Prints each tool that is not installed; returns 1 if any is missing.
+check_tools() {
+    missing=0
+    for needed in "${tools}/jdk17/bin/java" \
+            "${tools}/pylib/cmake/data/bin/cmake" \
+            "${tools}/pylib/bin/ninja" "${qt}/${qt_target}/bin/qt-cmake" \
+            "${qt}/gcc_64/bin/qt-cmake" "${sdk}/ndk/26.1.10909125" \
+            "${sdk}/build-tools/34.0.0/apksigner" "${tools}/debug.keystore"; do
+        if [ "${target}" = "desktop" ]; then
+            case "${needed}" in
+                "${sdk}"/* | "${tools}/debug.keystore") continue ;;
+            esac
+        fi
+        if [ ! -e "${needed}" ]; then
+            echo "missing: ${needed}" >&2
+            missing=1
+        fi
+    done
+    return "${missing}"
+}
+if ! check_tools; then
+    echo "The build tools are not installed in ${tools}." >&2
+    echo "Downloading them (several GB, network access needed); please" >&2
+    echo "wait.  This happens only when the tools are not installed." >&2
+    "${here}/setup-android-tools"
+    if ! check_tools; then
+        echo "error: the build tools are still missing after installing." >&2
+        exit 1
+    fi
+fi
+mkdir -p "${bod}"
+
+export PATH="${tools}/pylib/cmake/data/bin:${tools}/pylib/bin:${PATH}"
+export PATH="${tools}/jdk17/bin:${PATH}"
+export JAVA_HOME="${tools}/jdk17"
+export ANDROID_SDK_ROOT="${sdk}"
+export ANDROID_HOME="${sdk}"
+# keep Gradle's cache and the Android tools' settings out of the home directory
+export GRADLE_USER_HOME="${bod}/gradle"
+export ANDROID_USER_HOME="${bod}/android-user"
+out="${bod}/${target}"
+mkdir -p "${out}" "${GRADLE_USER_HOME}" "${ANDROID_USER_HOME}"
+# A build tree configured with tools in another place (the tools were moved
+# or reinstalled) records paths that no longer exist: start it again.
+if [ -f "${out}/CMakeCache.txt" ]; then
+    stale=0
+    for other in $(grep -o '/[^ =;:"]*/android-dev' "${out}/CMakeCache.txt" \
+            | sort -u); do
+        [ "${other}" = "${tools}" ] || stale=1
+    done
+    if [ "${stale}" -ne 0 ]; then
+        echo "${out} was configured with tools in another place;"
+        echo "removing it and configuring again."
+        rm -rf "${out}"
+        mkdir -p "${out}"
+    fi
+fi
+cd "${out}"
+
+if [ "${target}" = "desktop" ]; then
+    "${qt}/gcc_64/bin/qt-cmake" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Debug "${source_dir}"
+    cmake --build . --target musicplayer
+    echo "Program: ${out}/musicplayer"
+    exit 0
+fi
+
+"${qt}/${qt_target}/bin/qt-cmake" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DQT_HOST_PATH="${qt}/gcc_64" \
+    -DANDROID_NDK_ROOT="${sdk}/ndk/26.1.10909125" \
+    -DANDROID_SDK_ROOT="${sdk}" "${source_dir}"
+cmake --build . --target apk
+# the optimised (release) build comes out unsigned: align it and sign it with
+# the debug key (kept in ${tools}) so it installs and updates what is there
+build_tools="${sdk}/build-tools/34.0.0"
+unsigned="${out}/android-build/build/outputs/apk/release"
+unsigned="${unsigned}/android-build-release-unsigned.apk"
+signed="${bod}/milkcrate-vinyl-${target}.apk"
+"${build_tools}/zipalign" -f -p 4 "${unsigned}" "${out}/aligned.apk"
+"${build_tools}/apksigner" sign --ks "${tools}/debug.keystore" \
+    --ks-pass pass:android --key-pass pass:android \
+    --out "${signed}" "${out}/aligned.apk"
+echo "APK: ${signed}"

@@ -1,0 +1,143 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+CONFIGURING THE SHELL ENVIRONMENT
+=================================
+
+The scripts in scripts/ read their settings from environment
+variables.  scripts/setup sets them for the current shell.  The
+scripts run under bash or zsh, from any directory.
+
+Usage
+-----
+
+    source scripts/setup --venv DIR --bod DIR --database FILE
+
+setup must be sourced; run directly, it prints an error and stops.
+All three options are required.  "--venv=DIR" is also accepted.
+Relative paths are made absolute.
+
+setup:
+
+  1. Checks that all three options have values.
+  2. Rejects a BOD inside the project directory.
+  3. Exports the variables and prints them.
+
+If any step fails, no variable is changed.  setup does not create the
+virtual environment or the database; see below.
+
+"source scripts/setup" with no arguments prints the current settings.
+The settings last for the current shell.
+
+Variables
+---------
+
+MILKCRATEVINYL_VENV (--venv)
+    The Python virtual environment (a directory containing bin/python).
+    It holds the packages in desktop/requirements.txt.  It need not
+    exist.  The first script that needs it creates it (scripts/create-venv;
+    needs network access) and says so; later runs find it.  If the
+    directory is deleted, the next script creates it again.
+    scripts/create-venv also repairs or updates an existing one.
+
+MILKCRATEVINYL_BOD (--bod)
+    The build output directory.  All build output is written here and
+    nothing is written to the project directory.  It must be outside the
+    project.  It need not exist.  It contains:
+
+        android-dev/    Android toolchain (JDK, SDK, NDK, Qt,
+                        emulator) and a copy of the signing key
+        gradle/         Gradle cache
+        android-user/   emulator device (AVD)
+        <target>/       build trees (arm64_v8a, x86_64, desktop)
+        milkcrate-vinyl-<target>.apk
+
+    The toolchain is about 12 GB.  Do not put the BOD in /tmp if it
+    must survive a reboot.
+
+MILKCRATEVINYL_DATABASE (--database)
+    The library database.  It need not exist; see
+    02-creating-a-database.txt.
+
+    A script that needs the database uses, in this order:
+
+      1. the database option given on the command line;
+      2. MILKCRATEVINYL_DATABASE;
+      3. otherwise it stops with an error naming both.
+
+    The option is --database (-d) for play, edit-database,
+    initialize-database and change-music-root-directory, and
+    --desktop-db for sync-phone.
+
+Variables required per script
+-----------------------------
+
+    Script                         VENV  BOD  DATABASE
+    -----------------------------  ----  ---  --------
+    create-venv                    yes
+    play                           yes        yes
+    edit-database                  yes        yes
+    initialize-database            yes        yes
+    change-music-root-directory    yes        yes
+    sync-phone                     yes   *    yes
+    build-for-android              yes   yes
+    setup-android-tools            yes   yes
+    run-emulator                   yes   yes
+    test-acoustid                  yes
+
+    * Only for sync-phone --adb, which uses the adb in the BOD.
+
+Other variables
+---------------
+
+ACOUSTID_API_KEY
+    AcoustID application key.  Required by scripts/test-acoustid only.
+
+PYTHONPATH
+    Set by the scripts for the programs they start.  Do not set it for
+    this project.
+
+Test hooks (phone app, including its desktop build):
+
+    MILKCRATEVINYL_MUTE      if set, audio is muted
+    MILKCRATEVINYL_LIBRARY   folder with tags.db to try first
+    MILKCRATEVINYL_DIR       folder for the app's own data
+    MILKCRATEVINYL_SYNC      if set, start the sync server at startup
+    MILKCRATEVINYL_SYNC_PIN  fixed pairing code for the sync server
+
+MILKCRATEVINYL_ROOT is used inside scripts/test-acoustid; do not set it.
+
+Set by the scripts
+------------------
+
+PYTHONDONTWRITEBYTECODE=1 (no .pyc files) and PYTHONUTF8=1 (Python uses
+UTF-8 for file names whatever the locale is).  The Android scripts set
+GRADLE_USER_HOME, ANDROID_USER_HOME, ANDROID_AVD_HOME,
+ANDROID_EMULATOR_HOME, ANDROID_SDK_ROOT and ANDROID_HOME to
+directories in the BOD.
+
+Using adb with a phone
+----------------------
+
+Do not set ANDROID_USER_HOME in your own shell when running adb
+against a phone.  adb keeps its key in ~/.android otherwise.  The phone
+trusts that key; a different location creates a new key and the phone
+asks for USB debugging authorization again.
+
+The apps are signed with ~/.android/debug.keystore.  A copy is kept in
+the BOD, and build-for-android signs with the copy.  A phone rejects an
+update signed with another key; the app would have to be uninstalled,
+which erases its data.  Keep the key.
+
+Errors
+------
+
+  "setup must be sourced"
+      Use "source scripts/setup ...".
+  "--bod ... is inside the project"
+      Use a directory outside the project.
+  "MILKCRATEVINYL_... is not set"
+      Source scripts/setup in this shell.
+  "the virtual environment could not be created"
+      Usually no network access.  Fix it and run the script again.

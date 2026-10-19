@@ -1,0 +1,132 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+GETTING THE DATABASE AND THE MUSIC ONTO THE PHONE
+=================================================
+
+The phone app plays from a library folder holding two things:
+
+  * tags.db, a copy of the desktop database;
+  * the music files.
+
+The folder is <SD card>/MusicLibrary, or /storage/emulated/0/MusicLibrary
+if there is no card (see 09).  Syncing puts both there, and brings the
+plays and ratings made on the phone back to the desktop.  The same
+operation is used for the first copy and for later updates.
+
+Install the app first (09).
+
+Wi-Fi sync from the player or editor
+------------------------------------
+
+1. On the phone: open the app, tap the "..." button (Settings), under
+   "Sync with the desktop" tap Start.  The app shows a pairing code, the
+   phone's address and the port (8765).
+2. On the desktop: File > Sync with Phone...
+3. Enter the pairing code.  The last five codes are remembered, one per
+   phone, and can be picked from the list.  Leave "Phone address" empty
+   unless the phone is not found.
+4. Leave "Also copy new music to the phone" checked to copy music, or
+   uncheck it to sync the database only.
+5. Click Sync.  The log shows progress.
+
+The phone and the computer must be on the same Wi-Fi.  The phone is
+found by a UDP broadcast (port 8766); if that does not work, enter its
+address.  With USB tethering the phone is reached through the gateway.
+The sync server runs in the app: do not close it during the sync.
+
+Command line
+------------
+
+    scripts/sync-phone [--code CODE] [--host ADDRESS] [--no-music]
+                       [--force] [--desktop-db FILE]
+
+Same procedure, over Wi-Fi.  With no --code it uses the remembered codes
+(stored in phone-link.json in the database's folder) or asks for one.
+--no-music syncs the database only.  The database is the one given to
+scripts/setup unless --desktop-db is given.
+
+The script stops if the player or the editor is running (they keep the
+database in memory and would overwrite the result).  --force skips this
+check.
+
+USB cable with adb
+------------------
+
+    scripts/sync-phone --adb [--dest PATH] [--no-music]
+
+Needs USB debugging on the phone (09) and the adb installed in the BOD.
+--dest is the library folder on the phone, for example
+/storage/XXXX-XXXX/MusicLibrary; the default is the SD card of one
+particular phone, so give your own.  The card's identifier is the name shown by
+"adb shell ls /storage".
+
+The app is stopped, tags.db is copied from <dest>, merged and copied
+back, and then the music is copied with adb.
+
+What a sync does
+----------------
+
+1. Copies the phone's tags.db to the desktop.  A new phone has none and
+   gets the desktop's.
+2. Merges what the phone changed:
+     * play count, last played time and rating of each song: the newer
+       write wins (every write is stamped with the time it was made);
+     * dynamic-playlist entries played on the phone: they leave the
+       lists and are replaced, as if played on the desktop (05).
+3. Backs up the desktop database to <database>.bak-before-phone-sync
+   (before the first merge of a run) and sends the merged database to
+   the phone.  If the phone played something since step 1, steps 1 to 3
+   are repeated, up to three times.
+4. Copies music that the phone does not have, unless disabled.
+
+Everything else in the database (tags, playlists, rules, containers) is
+edited on the desktop only.  The phone's copy of those is replaced by the
+desktop's at each sync; nothing changed on the phone is kept.
+
+Music copying
+-------------
+
+  * All songs in the database are copied, with the cover images (jpg,
+    jpeg, png) under the music folder.  Duplicates are copied too,
+    except where a name collision is described below.
+  * A song already on the phone with the same size is skipped, so an
+    interrupted copy continues where it stopped.
+  * The first sync copies the whole library.  Check the free space on
+    the card.  A progress line shows files, gigabytes, speed and the
+    estimated time left; a failed file is tried three times.
+  * The card's file system cannot hold some characters.  File and folder
+    names are cleaned the same way on the phone and the desktop:
+      - each of  * ? : " < > |  \ and control characters becomes _
+      - trailing dots and spaces become _
+      - names that differ only in capital letters are one name; the
+        file that is not the primary is skipped and listed
+  * Songs removed from the library are not deleted from the phone.
+
+After syncing
+-------------
+
+The app reloads the database when it returns to the foreground.  If the
+song list is empty, open Settings, check that the database and music
+folder paths are those of the library folder, and tap Load library.
+
+Errors
+------
+
+  "Close the desktop player and editor first"
+      Close them, or use --force.
+  "The phone's sync server was not found"
+      Start the sync on the phone (Settings > Sync with the desktop >
+      Start), check that both are on the same Wi-Fi, or give the
+      address.
+  "... refused the pairing code"
+      The code changed ("New code") or belongs to another phone.
+  "The phone recorded a play meanwhile; fetching its database again"
+      Normal; it repeats.  If it fails three times, stop playing on the
+      phone and run it again.
+  "The phone is not connected (USB debugging on, cable in, allow this
+  computer)"
+      For --adb: see 09.
+  "adb is not installed: ..."
+      Run scripts/setup-android-tools.

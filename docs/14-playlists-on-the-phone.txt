@@ -1,0 +1,96 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+PLAYLISTS ON THE PHONE
+======================
+
+The Playlists tab shows the playlists made on the desktop: static
+playlists (04), dynamic playlists (05), containers and sequences (06).
+The phone plays them; it cannot create, rename, edit or delete them.
+Make changes on the desktop and sync (11).
+
+The app opens on the Playlists tab when the library has playlists.  The
+tab title shows the number of playlists, and a note symbol while the
+music comes from one of them.
+
+The list
+--------
+
+Three groups, each in alphabetical order: Sequences, Containers and
+Playlists (static and dynamic together).  A row shows:
+
+    name
+    details
+
+Details by kind:
+
+    static playlist    "42 tracks"
+    dynamic playlist   "20 tracks  .  dynamic  .  1530 matched"
+    container          "10:00, fades out  .  playlist names"
+                       (fades out, cut off or finishes the track)
+    sequence           "3 containers: container names"
+
+"N matched" is the number of library songs that the dynamic playlist's
+rules select (05).  A playing row is tinted and its details begin with
+"Playing" or "Paused".
+
+Each row has a play button.  The marked row (grey tint) is the one the
+main play button starts when nothing is playing; it is the first one to
+begin with, and the last row tapped afterwards.
+
+Opening and playing
+-------------------
+
+  * Tap a static or dynamic playlist: its songs are shown.  The top bar
+    shows the name and, for a dynamic playlist, the "N matched" count;
+    the arrow returns to the list.  Tap a song to play from it.
+  * Tap a container or sequence: it plays.
+  * The play button on a row plays that playlist from its start, or
+    from a random song if shuffle is on.
+  * The main play button, with nothing playing: on the list, it plays
+    the marked playlist; in an opened playlist, it plays the first song.
+
+Playing a playlist makes its songs the queue.  Next, Previous and
+shuffle work within it.  Shuffle (the button beside the controls) plays
+in random order without repeating a song until all have played.
+
+Tapping the song that is playing does not restart it.
+
+Dynamic playlists
+-----------------
+
+A song counts as played after 20 seconds of listening.  When a counted
+song ends or is left, the dynamic playlist drops it and adds a matching
+song at the end, as on the desktop (05).  The change reaches the
+desktop at the next sync.
+
+Containers and sequences
+------------------------
+
+While one plays, a line above the controls shows the section, its
+position in the sequence, the time left and the total time left, with a
+"Next section" button.  The limits and end modes (fade, cut, finish)
+and the "when empty" setting work as on the desktop (06).  Playback
+stops after the last section.
+
+Back button
+-----------
+
+  * In an opened playlist: returns to the list of playlists.
+  * In the list of playlists: goes to the Songs tab.
+  * In the Songs tab: hides the app, as Home does.  Music keeps
+    playing.  Swiping the app away from recent apps stops it.
+
+Notification and lock screen
+----------------------------
+
+Controls for play/pause, next, previous, stop, seek and the rating
+buttons (13).
+
+Updating the playlists
+----------------------
+
+Playlists on the phone are the ones in its copy of tags.db.  After a
+change on the desktop, sync (11); the list is reloaded when the app
+returns to the foreground.

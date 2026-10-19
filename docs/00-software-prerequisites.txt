@@ -1,0 +1,95 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+SOFTWARE PREREQUISITES
+======================
+
+Install these before following the other documents.  Everything else
+is downloaded by the scripts into the virtual environment or the build
+output directory (BOD); nothing is installed system-wide.
+
+Operating system
+----------------
+
+Linux.  The scripts were developed on Debian 13.
+
+Desktop programs (player, editor, database tools)
+-------------------------------------------------
+
+Required:
+
+  * bash or zsh.  Only bash has been tested.
+  * python3.  Tested with 3.13.
+  * realpath (GNU coreutils).
+  * pgrep (procps); used by scripts/sync-phone.
+  * The xcb-cursor library, which Qt needs to open a window:
+    libxcb-cursor0 (Debian, Ubuntu), xcb-util-cursor (Fedora, Arch).
+    See below.
+  * Network access to PyPI the first time (the first script run creates
+    the virtual environment and installs the packages).
+
+On Debian, python3-venv is not needed.  If python3 lacks ensurepip,
+scripts/create-venv fetches pip from PyPI and verifies its checksum.
+
+Installed into the virtual environment from desktop/requirements.txt:
+
+    PyQt6  mutagen  numpy  pyacoustid  musicbrainzngs
+
+PyQt6 uses the system's X11 or Wayland, OpenGL and audio libraries.  Qt
+6.5 and later also needs the xcb-cursor library:
+
+    Debian, Ubuntu   sudo apt install libxcb-cursor0
+    Fedora           sudo dnf install xcb-util-cursor
+    Arch             sudo pacman -S xcb-util-cursor
+
+Without it the programs fail to start with:
+
+    qt.qpa.plugin: From 6.5.0, xcb-cursor0 or libxcb-cursor0 is needed to
+    load the Qt xcb platform plugin.
+    qt.qpa.plugin: Could not load the Qt platform plugin "xcb" ...
+
+If another library is missing, the message names it; install it.  The
+Fedora and Arch package names have not been tested.
+
+A warning that the locale is not UTF-8 ("Detected locale ... which is not
+UTF-8") is harmless: Qt switches to UTF-8 itself.
+
+Optional:
+
+  * ffmpeg, on the PATH: required by desktop/loudness.py (volume
+    leveling) and desktop/bpm_batch.py (tempo).
+  * chromaprint (fpcalc) and an AcoustID API key
+    (ACOUSTID_API_KEY): only for scripts/test-acoustid.
+
+Android build
+-------------
+
+scripts/setup-android-tools and scripts/build-for-android need:
+
+  * bash, python3 and the virtual environment (above).
+  * curl, tar, unzip, mktemp, realpath.  The script checks for them first
+    and names any that are missing.  Debian/Ubuntu:
+        sudo apt install curl tar unzip coreutils
+  * Network access.
+  * About 12 GB of free space in the BOD.
+
+They download into the BOD:
+
+    JDK 17, Android command-line tools, platform-tools, Android 34
+    platform, build-tools 34.0.0, NDK 26.1.10909125, emulator and a
+    system image, cmake, ninja, Qt 6.8.3 (desktop, arm64_v8a and
+    x86_64)
+
+The "desktop" build target compiles with the system C++ compiler and
+needs Qt's desktop libraries; the Android targets use the NDK.
+
+Phones
+------
+
+  * Phone with Android; the app is built for arm64 (and x86_64 for the
+    emulator).
+  * To install with adb: USB debugging enabled on the phone and a USB
+    cable.  Otherwise copy the APK to the phone and open it.
+  * To sync over Wi-Fi: the phone and the computer on the same
+    network.

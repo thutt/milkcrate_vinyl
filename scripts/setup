@@ -1,0 +1,169 @@
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Source this file (bash or zsh); do not run it:
+#
+#     source scripts/setup --venv DIR --bod DIR --database FILE
+#
+#   --venv DIR       the Python virtual environment (it need not exist
+#                    yet: the scripts create it when they first need it)
+#   --bod DIR        the build output directory (BOD): all build output goes
+#                    there; it must be outside the project
+#   --database FILE  the library database the programs open (it need not exist
+#                    yet: scripts/initialize-database creates it)
+#
+# All three are required.  They are recorded in MILKCRATEVINYL_VENV,
+# MILKCRATEVINYL_BOD and MILKCRATEVINYL_DATABASE, which the scripts use.
+# Relative paths are made absolute.
+# Nothing is changed unless all three are valid.  Sourcing it without arguments
+# shows the current settings.
+
+music_setup_sourced=
+music_setup_file=${0}
+if [ -n "${ZSH_VERSION:-}" ]; then
+    case ${ZSH_EVAL_CONTEXT} in *:file*) music_setup_sourced=1 ;; esac
+    music_setup_file=$(eval 'echo ${(%):-%x}')
+elif [ -n "${BASH_VERSION:-}" ]; then
+    [ "${BASH_SOURCE[0]}" != "${0}" ] && music_setup_sourced=1
+    music_setup_file=${BASH_SOURCE[0]}
+fi
+if [ -z "${music_setup_sourced}" ]; then
+    echo "setup must be sourced, or the settings are lost when it ends:" >&2
+    echo "    source scripts/setup --venv DIR --bod DIR --database FILE" >&2
+    exit 1
+fi
+unset music_setup_sourced
+
+music_setup_usage() {
+    echo "usage: source scripts/setup --venv DIR --bod DIR \
+--database FILE" >&2
+    echo "  --venv DIR       the Python virtual environment" >&2
+    echo "  --bod DIR        the build output directory (outside project)" >&2
+    echo "  --database FILE  the library database" >&2
+    echo "  All three are required." >&2
+}
+
+music_setup_abs() {
+    case "${1}" in
+        /*) music_setup_value=${1} ;;
+        *) music_setup_value=${PWD}/${1} ;;
+    esac
+    while [ "${music_setup_value%/}" != "${music_setup_value}" ] \
+            && [ "${music_setup_value}" != "/" ]; do
+        music_setup_value=${music_setup_value%/}
+    done
+}
+
+music_setup_cleanup() {
+    unset music_setup_file music_setup_venv music_setup_bod music_setup_db
+    unset music_setup_value music_setup_here music_setup_root
+    unset -f music_setup_usage music_setup_abs music_setup_cleanup
+}
+
+if [ ${#} -eq 0 ]; then
+    if [ -n "${MILKCRATEVINYL_VENV:-}" ] && [ -n "${MILKCRATEVINYL_BOD:-}" ] \
+            && [ -n "${MILKCRATEVINYL_DATABASE:-}" ]; then
+        echo "MILKCRATEVINYL_VENV=${MILKCRATEVINYL_VENV}"
+        echo "MILKCRATEVINYL_BOD=${MILKCRATEVINYL_BOD}"
+        echo "MILKCRATEVINYL_DATABASE=${MILKCRATEVINYL_DATABASE}"
+        music_setup_cleanup
+        return 0
+    fi
+    music_setup_usage
+    music_setup_cleanup
+    return 1
+fi
+
+music_setup_venv=
+music_setup_bod=
+music_setup_db=
+while [ ${#} -gt 0 ]; do
+    case "${1}" in
+        --venv | --bod | --database)
+            if [ ${#} -lt 2 ] || [ -z "${2}" ]; then
+                echo "error: ${1} needs a value." >&2
+                music_setup_usage
+                music_setup_cleanup
+                return 1
+            fi
+            music_setup_value=${2}
+            case "${1}" in
+                --venv) music_setup_venv=${music_setup_value} ;;
+                --bod) music_setup_bod=${music_setup_value} ;;
+                --database) music_setup_db=${music_setup_value} ;;
+            esac
+            shift 2
+            ;;
+        --venv=* | --bod=* | --database=*)
+            music_setup_value=${1#*=}
+            if [ -z "${music_setup_value}" ]; then
+                echo "error: ${1%%=*} needs a value." >&2
+                music_setup_usage
+                music_setup_cleanup
+                return 1
+            fi
+            case "${1}" in
+                --venv=*) music_setup_venv=${music_setup_value} ;;
+                --bod=*) music_setup_bod=${music_setup_value} ;;
+                --database=*) music_setup_db=${music_setup_value} ;;
+            esac
+            shift
+            ;;
+        *)
+            echo "error: unknown argument: ${1}" >&2
+            music_setup_usage
+            music_setup_cleanup
+            return 1
+            ;;
+    esac
+done
+
+if [ -z "${music_setup_venv}" ] || [ -z "${music_setup_bod}" ] \
+        || [ -z "${music_setup_db}" ]; then
+    [ -n "${music_setup_venv}" ] || echo "error: --venv is required." >&2
+    [ -n "${music_setup_bod}" ] || echo "error: --bod is required." >&2
+    [ -n "${music_setup_db}" ] || echo "error: --database is required." >&2
+    music_setup_usage
+    music_setup_cleanup
+    return 1
+fi
+
+music_setup_abs "${music_setup_venv}"
+music_setup_venv=${music_setup_value}
+music_setup_abs "${music_setup_bod}"
+music_setup_bod=$(realpath -m -- "${music_setup_value}")
+music_setup_abs "${music_setup_db}"
+music_setup_db=${music_setup_value}
+
+music_setup_here=$(cd "$(dirname "${music_setup_file}")" && pwd)
+music_setup_root=$(realpath -- "$(dirname "${music_setup_here}")")
+case "${music_setup_bod}/" in
+    "${music_setup_root}/"*)
+        echo "error: --bod ${music_setup_bod} is inside the project" >&2
+        echo "(${music_setup_root}); use a directory outside it." >&2
+        music_setup_cleanup
+        return 1
+        ;;
+esac
+
+export MILKCRATEVINYL_VENV="${music_setup_venv}"
+export MILKCRATEVINYL_BOD="${music_setup_bod}"
+export MILKCRATEVINYL_DATABASE="${music_setup_db}"
+music_setup_cleanup
+if [ -x "${MILKCRATEVINYL_VENV}/bin/python" ]; then
+    echo "MILKCRATEVINYL_VENV=${MILKCRATEVINYL_VENV}"
+else
+    echo "MILKCRATEVINYL_VENV=${MILKCRATEVINYL_VENV} (not created yet: it is"
+    echo "    created when a script first needs it)"
+fi
+echo "MILKCRATEVINYL_BOD=${MILKCRATEVINYL_BOD}"
+if [ -e "${MILKCRATEVINYL_DATABASE}" ]; then
+    echo "MILKCRATEVINYL_DATABASE=${MILKCRATEVINYL_DATABASE}"
+else
+    echo "MILKCRATEVINYL_DATABASE=${MILKCRATEVINYL_DATABASE} (not created yet:"
+    echo "    run scripts/initialize-database --root DIR)"
+fi
