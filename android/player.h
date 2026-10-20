@@ -9,6 +9,9 @@
 // playback engine (which runs in its own thread, see engine.h) and mirrors the
 // engine's state for the QML interface.
 #pragma once
+#include <QStringList>
+#include <QVariantList>
+#include <QVector>
 #include <QObject>
 #include <QSettings>
 #include <QThread>
@@ -33,6 +36,13 @@ class Player : public QObject {
     Q_PROPERTY(double target READ target WRITE setTarget NOTIFY volumeChanged)
     Q_PROPERTY(
         bool leveling READ leveling WRITE setLeveling NOTIFY volumeChanged)
+    Q_PROPERTY(bool eqOn READ eqOn WRITE setEqOn NOTIFY eqChanged)
+    Q_PROPERTY(QVariantList eqGains READ eqGains NOTIFY eqChanged)
+    Q_PROPERTY(bool eqAuto READ eqAuto WRITE setEqAuto NOTIFY eqChanged)
+    Q_PROPERTY(QString eqAutoName READ eqAutoName NOTIFY eqChanged)
+    Q_PROPERTY(QStringList eqPresets READ eqPresets CONSTANT)
+    Q_PROPERTY(QString eqPreset READ eqPreset NOTIFY eqChanged)
+    Q_PROPERTY(QStringList eqBands READ eqBands CONSTANT)
     Q_PROPERTY(QString dbPath READ dbPath NOTIFY pathsChanged)
     Q_PROPERTY(QString musicRoot READ musicRoot NOTIFY pathsChanged)
     Q_PROPERTY(QString message READ message NOTIFY messageChanged)
@@ -77,6 +87,18 @@ public:
     double volume() const { return m_volume; }
     double target() const { return m_target; }
     bool leveling() const { return m_leveling; }
+    bool eqOn() const { return m_eqOn; }
+    bool eqAuto() const { return m_eqAuto; }
+    // "": the song has no genre with a preset
+    QString eqAutoName() const { return m_eqAutoName; }
+    void setEqAuto(bool on);
+    QVariantList eqGains() const;
+    QStringList eqPresets() const;
+    QString eqPreset() const;  // the preset the gains match, else "Custom"
+    QStringList eqBands() const;  // "60 Hz", ...
+    void setEqOn(bool on);
+    Q_INVOKABLE void setEqBand(int band, double gainDb);
+    Q_INVOKABLE void setEqPreset(const QString &name);
     QString dbPath() const { return m_dbPath; }
     QString musicRoot() const { return m_root; }
     QString message() const { return m_message; }
@@ -128,6 +150,7 @@ signals:
     void durationChanged();
     void shuffleChanged();
     void volumeChanged();
+    void eqChanged();
     void pathsChanged();
     void messageChanged();
     void filesAccessChanged();
@@ -174,5 +197,9 @@ private:
     void setPlayingList(qint64 id);
     int m_rating = -1;  // of the playing track; -1 = not rated
     bool m_shuffle = false, m_leveling = true, m_needsFilesAccess = false;
-    double m_volume = 0.5, m_target = -18.0;
+    double m_volume = 1.0, m_target = -10.0;
+    bool m_eqOn = false, m_eqAuto = false;
+    QString m_eqAutoName;
+    QVector<double> m_eqGains = QVector<double>(5, 0.0);
+    void pushEq();
 };

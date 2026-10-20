@@ -12,7 +12,11 @@
 // depend on the main thread.  The engine lives in a worker thread; the main
 // thread (Player) only mirrors its state.
 #pragma once
+#include <QAudioBuffer>
+#include <QAudioBufferOutput>
 #include <QAudioOutput>
+#include <QAudioSink>
+#include <QMediaDevices>
 #include <QMediaPlayer>
 #include <QElapsedTimer>
 #include <QMutex>
@@ -21,6 +25,8 @@
 #include <QVector>
 #include <atomic>
 
+#include "eqpresets.h"
+#include "equalizer.h"
 #include "playlists.h"
 #include "trackmodel.h"
 
@@ -42,7 +48,7 @@ public slots:
     void setRoot(const QString &root) { m_root = root; }
     void setDatabase(const QString &path);  // also tops up dynamic playlists
                                             // that are short, a little later
-    void setMuted(bool on) { m_audio->setMuted(on); }
+    void setMuted(bool on);
     void
     resume();  // play the current song if it is not playing; never restarts it
     void playQueue(const QVector<QueueItem> &items, int row, bool shuffle);
@@ -55,12 +61,16 @@ public slots:
     void seek(qint64 ms);
     void setShuffle(bool on);
     void setVolume(double volume, double target, bool leveling);
+    // gains: dB per band.  automatic: the song's genres choose a preset (see
+    // eqpresets.h) and the gains are used for songs that get none.
+    void setEqualizer(bool on, const QVector<double> &gains, bool automatic);
 signals:
     void current(qint64 id, const QString &title, const QString &artist,
                  const QString &album);
     void playingChanged(bool playing);
     void message(const QString &text);
     void ratingKnown(qint64 id, int rating);  // -1: not rated
+    void eqChosen(const QString &preset);     // automatic equalizer; "": none
     void playCounted();  // a play was written to the database (lists may have
                          // changed)
 public:
@@ -69,11 +79,25 @@ public:
         int rating);  // 0 to 5, or -1 for not rated; written to tags.db at once
 private:
     void readRating(qint64 id);
+    QStringList readGenres(qint64 id);
+    void chooseEqPreset(qint64 id);  // for the automatic equalizer
+    const double *eqGains() const;   // the ones in use for this song
+    void applyEqGains();
     void refillLists();  // top up dynamic playlists that are short, in the
                          // background
     void buildOrder(int startRow, bool keepFirst);
     void playCurrent();
     void applyVolume();
+    // The equalizer.  Off, the player plays through its own audio output.  On,
+    // the player only decodes: its PCM buffers go through the equalizer into a
+    // sink of our own.  The player cannot change between the two while a song
+    // plays, so the switch is made when the next song is loaded (routeAudio).
+    void routeAudio();
+    void flushAudio();  // drop what is waiting to be played (after a seek)
+    void onAudioBuffer(const QAudioBuffer &buffer);
+    void openSink(int sourceRate);
+    void drainSink();
+    void closeSink();
     void startSection();
     void advanceSection();
     void endSchedule(const QString &why = {});
@@ -125,5 +149,23 @@ private:
     std::atomic<qint64> m_totalRemaining{-1};  // ms left in all, -1 = unknown
     std::atomic<int> m_sectionIndex{0};
 
-    double m_volume = 0.5, m_target = -18.0, m_loudness = 0;
+    double m_volume = 1.0, m_target = -10.0, m_loudness = 0;
+
+    bool m_eqOn = false, m_eqAuto = false, m_eqRouted = false, m_muted = false;
+    const EqPreset *m_autoPreset = nullptr;  // chosen for the current song
+    bool m_naturalEnd = false;  // the song ended by itself: let it finish
+    QVector<double> m_eqGains = QVector<double>(Equalizer::Bands, 0.0);
+    Equalizer m_eq;
+    QAudioBufferOutput *m_bufferOut = nullptr;
+    QAudioSink *m_sink = nullptr;
+    QIODevice *m_sinkIo = nullptr;
+    QTimer *m_drain = nullptr;
+    QMediaDevices *m_devices = nullptr;
+    QByteArray m_eqQueue;  // 16-bit stereo waiting for the sink
+    int m_sourceRate = 0, m_sinkRate = 0;
+    double m_resamplePos = 0;  // position of the next output sample, in input
+                               // samples after m_last
+    float m_last[2] = {0, 0};
+    float m_gain = 1, m_gainFrom = 1;  // volume applied before the equalizer
+    bool m_devicesChanged = false;
 };

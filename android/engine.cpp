@@ -7,6 +7,7 @@
 #include "engine.h"
 #include "dblock.h"
 #include "dynamic.h"
+#include <QAudioDevice>
 #include <QThreadPool>
 #include <QTimer>
 
@@ -57,8 +58,20 @@ void Engine::init() {
             });
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
             [this](QMediaPlayer::MediaStatus s) {
-                if (s == QMediaPlayer::EndOfMedia) next();
+                if (s != QMediaPlayer::EndOfMedia) return;
+                m_naturalEnd = true;
+                next();
+                m_naturalEnd = false;
             });
+    m_bufferOut = new QAudioBufferOutput(this);
+    connect(m_bufferOut, &QAudioBufferOutput::audioBufferReceived, this,
+            &Engine::onAudioBuffer);
+    m_drain = new QTimer(this);
+    m_drain->setInterval(10);
+    connect(m_drain, &QTimer::timeout, this, &Engine::drainSink);
+    m_devices = new QMediaDevices(this);
+    connect(m_devices, &QMediaDevices::audioOutputsChanged, this,
+            [this] { m_devicesChanged = true; });
     connect(m_player, &QMediaPlayer::errorOccurred, this,
             [this](QMediaPlayer::Error, const QString &text) {
                 emit message("Cannot play: " + text);
@@ -69,8 +82,196 @@ void Engine::init() {
 // target and the track's loudness (the output cannot go above full).
 void Engine::applyVolume() {
     double gain = (m_leveling && m_measured) ? m_target - m_loudness : 0.0;
-    m_audio->setVolume(
-        std::min(1.0, m_volume * m_fade * std::pow(10.0, gain / 20.0)));
+    double v = std::min(1.0, m_volume * m_fade * std::pow(10.0, gain / 20.0));
+    m_audio->setVolume(v);
+    m_gain = m_muted ? 0.0f : float(v);  // used before the equalizer
+}
+
+void Engine::setMuted(bool on) {
+    m_muted = on;
+    m_audio->setMuted(on);
+    applyVolume();
+}
+
+// -- the equalizer --
+
+void Engine::setEqualizer(bool on, const QVector<double> &gains,
+                          bool automatic) {
+    m_eqOn = on;  // takes effect with the next song
+    m_eqGains = gains;
+    m_eqGains.resize(Equalizer::Bands);
+    if (automatic != m_eqAuto) {
+        m_eqAuto = automatic;
+        chooseEqPreset(m_currentId);
+    }
+    applyEqGains();
+}
+
+const double *Engine::eqGains() const {
+    return m_eqAuto && m_autoPreset ? m_autoPreset->gains
+                                    : m_eqGains.constData();
+}
+
+void Engine::applyEqGains() {
+    if (m_sourceRate > 0) m_eq.configure(m_sourceRate, eqGains());
+}
+
+void Engine::chooseEqPreset(qint64 id) {
+    m_autoPreset = nullptr;
+    if (m_eqAuto && id >= 0) m_autoPreset = eqPresetForGenres(readGenres(id));
+    emit eqChosen(m_autoPreset ? QString(m_autoPreset->name) : QString());
+}
+
+QStringList Engine::readGenres(qint64 id) {
+    QStringList genres;
+    if (m_dbPath.isEmpty()) return genres;
+    QMutexLocker lock(&dbLock());
+    const QString name = "genre-" + QUuid::createUuid().toString(QUuid::Id128);
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db.setDatabaseName(m_dbPath);
+        db.setConnectOptions("QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
+        if (db.open()) {
+            QSqlQuery q(db);
+            q.prepare("SELECT value FROM tag WHERE file_id = ? AND name = "
+                      "'GENRE' ORDER BY pos");
+            q.addBindValue(id);
+            if (q.exec())
+                while (q.next()) genres << q.value(0).toString();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(name);
+    return genres;
+}
+
+void Engine::routeAudio() {
+    if (m_eqOn == m_eqRouted) return;
+    if (m_eqOn) {
+        m_player->setAudioOutput(nullptr);
+        m_player->setAudioBufferOutput(m_bufferOut);
+        m_drain->start();
+    } else {
+        m_player->setAudioBufferOutput(nullptr);
+        m_player->setAudioOutput(m_audio);
+        m_drain->stop();
+        closeSink();
+    }
+    m_eqRouted = m_eqOn;
+}
+
+void Engine::closeSink() {
+    if (m_sink) {
+        m_sink->stop();
+        delete m_sink;
+        m_sink = nullptr;
+        m_sinkIo = nullptr;
+    }
+    m_eqQueue.clear();
+    m_sourceRate = 0;
+}
+
+void Engine::flushAudio() {
+    m_eqQueue.clear();
+    m_eq.reset();
+    m_resamplePos = 0;
+    m_last[0] = m_last[1] = 0;
+    if (m_sink) {
+        m_sink->stop();
+        m_sinkIo = m_sink->start();
+    }
+}
+
+// Stereo 16 bit at the source's rate when the device takes it, else at the
+// device's preferred rate (the sound is resampled in onAudioBuffer).
+void Engine::openSink(int sourceRate) {
+    closeSink();
+    QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    QAudioFormat format;
+    format.setSampleFormat(QAudioFormat::Int16);
+    format.setChannelCount(2);
+    format.setSampleRate(sourceRate);
+    if (!device.isFormatSupported(format))
+        format.setSampleRate(device.preferredFormat().sampleRate());
+    m_sink = new QAudioSink(device, format, this);
+    m_sink->setBufferSize(int(format.bytesForDuration(150000)));
+    m_sinkIo = m_sink->start();
+    m_sourceRate = sourceRate;
+    m_sinkRate = format.sampleRate();
+    m_devicesChanged = false;
+    m_resamplePos = 0;
+    m_eq.configure(sourceRate, eqGains());
+    m_eq.reset();
+}
+
+void Engine::drainSink() {
+    if (!m_sinkIo || m_eqQueue.isEmpty()) return;
+    qint64 room = m_sink->bytesFree();
+    if (room <= 0) return;
+    qint64 n = m_sinkIo->write(m_eqQueue.constData(),
+                               qMin<qint64>(room, m_eqQueue.size()));
+    if (n > 0) m_eqQueue.remove(0, int(n));
+}
+
+static float sampleAt(const QAudioBuffer &b, int frame, int channel) {
+    int n = b.format().channelCount();
+    int i = frame * n + (channel < n ? channel : n - 1);
+    switch (b.format().sampleFormat()) {
+        case QAudioFormat::UInt8:
+            return (b.constData<quint8>()[i] - 128) / 128.0f;
+        case QAudioFormat::Int16: return b.constData<qint16>()[i] / 32768.0f;
+        case QAudioFormat::Int32:
+            return float(b.constData<qint32>()[i] / 2147483648.0);
+        case QAudioFormat::Float: return b.constData<float>()[i];
+        default: return 0;
+    }
+}
+
+void Engine::onAudioBuffer(const QAudioBuffer &buffer) {
+    if (!m_eqOn || !m_eqRouted || !buffer.isValid()) return;
+    int rate = buffer.format().sampleRate(), frames = buffer.frameCount();
+    if (!m_sink || rate != m_sourceRate || m_devicesChanged) openSink(rate);
+    if (!m_sinkIo) return;
+    // stereo float, with the volume (ramped across the buffer, not stepped)
+    QVector<float> pcm(frames * 2);
+    float from = m_gainFrom, to = m_gain;
+    for (int f = 0; f < frames; ++f) {
+        float g = from + (to - from) * float(f) / float(frames);
+        pcm[f * 2] = sampleAt(buffer, f, 0) * g;
+        pcm[f * 2 + 1] = sampleAt(buffer, f, 1) * g;
+    }
+    m_gainFrom = to;
+    m_eq.process(pcm.data(), frames);
+    // resample when the device does not take the source's rate (linear)
+    QVector<float> out;
+    if (m_sinkRate == rate) {
+        out = pcm;
+    } else {
+        double step = double(rate) / m_sinkRate;
+        double pos = m_resamplePos;  // 0 is the sample before pcm[0]
+        while (pos < frames) {
+            int i = int(std::floor(pos));
+            double frac = pos - i;
+            for (int c = 0; c < 2; ++c) {
+                float a = i == 0 ? m_last[c] : pcm[(i - 1) * 2 + c];
+                float b = pcm[i * 2 + c];
+                out.append(float(a + (b - a) * frac));
+            }
+            pos += step;
+        }
+        m_resamplePos = pos - frames;
+        m_last[0] = pcm[(frames - 1) * 2];
+        m_last[1] = pcm[(frames - 1) * 2 + 1];
+    }
+    QByteArray bytes(out.size() * 2, Qt::Uninitialized);
+    qint16 *dst = reinterpret_cast<qint16 *>(bytes.data());
+    for (int i = 0; i < out.size(); ++i)
+        dst[i] = qint16(std::lrint(std::clamp(out[i], -1.0f, 1.0f) * 32767));
+    m_eqQueue.append(bytes);
+    const int maxQueue = m_sinkRate * 4 * 2;  // 2 s: the device has stalled
+    if (m_eqQueue.size() > maxQueue)
+        m_eqQueue.remove(0, m_eqQueue.size() - maxQueue);
+    drainSink();
 }
 
 void Engine::setVolume(double volume, double target, bool leveling) {
@@ -159,6 +360,10 @@ void Engine::playCurrent() {
         return;  // stay on this track so the message stays readable
     }
     emit message({});
+    chooseEqPreset(t.id);
+    applyEqGains();
+    routeAudio();
+    if (!m_naturalEnd) flushAudio();  // else the last of the song still plays
     m_player->setSource(QUrl::fromLocalFile(full));
     m_player->play();
 }
@@ -204,6 +409,7 @@ void Engine::previous() {
     if (m_order.isEmpty()) return;
     if (m_player->position() > 3000 || m_pos == 0) {
         m_player->setPosition(0);
+        flushAudio();
         return;
     }
     --m_pos;
@@ -212,6 +418,7 @@ void Engine::previous() {
 
 void Engine::seek(qint64 ms) {
     m_player->setPosition(ms);
+    flushAudio();
     pushState();
 }
 

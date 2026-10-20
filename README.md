@@ -51,6 +51,8 @@ counts and last-played dates are the same on both: one version of the truth.
 - Finds duplicate copies of a song and keeps them out of your playlists.
 - Searches by artist, album, song or genre, on the desktop and on the phone.
 - Evens out loud and quiet songs with volume leveling.
+- An equalizer on the phone, with presets for rock, metal, jazz and other
+  kinds of music, that can pick the preset from each song's genre.
 - An Android app that plays in the background, with lock-screen controls and
   rating.
 - Syncs ratings, play counts, last-played dates and new music between the
@@ -110,6 +112,7 @@ The documentation is in [docs/](docs/), as plain text, to be read in order.
 12. [Searching on the phone][d12]
 13. [Rating on the phone][d13]
 14. [Playlists on the phone][d14]
+15. [Sound on the phone][d15]
 
 [d00]: docs/00-software-prerequisites.txt
 [d01]: docs/01-configuring-the-shell.txt
@@ -126,6 +129,7 @@ The documentation is in [docs/](docs/), as plain text, to be read in order.
 [d12]: docs/12-searching-on-the-phone.txt
 [d13]: docs/13-rating-on-the-phone.txt
 [d14]: docs/14-playlists-on-the-phone.txt
+[d15]: docs/15-sound-on-the-phone.txt
 
 ## Project layout
 

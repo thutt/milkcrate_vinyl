@@ -7,6 +7,7 @@
 #include "player.h"
 
 #include "dynamic.h"
+#include "eqpresets.h"
 
 #include <QDebug>
 #include <QDir>
@@ -15,6 +16,7 @@
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QThreadPool>
+#include <algorithm>
 
 #ifdef Q_OS_ANDROID
 #include <QCoreApplication>
@@ -40,9 +42,14 @@ static void nativeCommand(JNIEnv *, jclass, jint what, jlong argument) {
 Player::Player(QObject *parent)
     : QObject(parent), m_engine(new Engine), m_sync(new SyncServer),
       m_settings() {
-    m_volume = m_settings.value("volume", 0.5).toDouble();
-    m_target = m_settings.value("target", -18.0).toDouble();
+    m_volume = m_settings.value("volume", 1.0).toDouble();
+    m_target = m_settings.value("target", -10.0).toDouble();
     m_leveling = m_settings.value("leveling", true).toBool();
+    m_eqOn = m_settings.value("eqOn", false).toBool();
+    m_eqAuto = m_settings.value("eqAuto", false).toBool();
+    QStringList saved = m_settings.value("eqGains").toStringList();
+    for (int i = 0; i < saved.size() && i < m_eqGains.size(); ++i)
+        m_eqGains[i] = std::clamp(saved[i].toDouble(), -12.0, 12.0);
     m_shuffle = m_settings.value("shuffle", false).toBool();
 
     m_engine->moveToThread(&m_thread);
@@ -73,6 +80,11 @@ Player::Player(QObject *parent)
             [this] { reloadPlaylists(); });
     m_thread.start();
     m_sync->moveToThread(&m_syncThread);
+    connect(m_engine, &Engine::eqChosen, this, [this](const QString &name) {
+        if (name == m_eqAutoName) return;
+        m_eqAutoName = name;
+        emit eqChanged();
+    });
     connect(&m_syncThread, &QThread::finished, m_sync, &QObject::deleteLater);
     connect(m_sync, &SyncServer::running, this,
             [this](bool on, const QString &code, const QStringList &addresses) {
@@ -92,6 +104,7 @@ Player::Player(QObject *parent)
     m_syncThread.start();
     onEngine([e = m_engine] { e->init(); });
     pushVolume();
+    pushEq();
     onEngine([e = m_engine, s = m_shuffle] { e->setShuffle(s); });
 #ifdef Q_OS_ANDROID
     g_engine = m_engine;
@@ -405,6 +418,76 @@ void Player::setLeveling(bool on) {
     m_settings.setValue("leveling", on);
     pushVolume();
     emit volumeChanged();
+}
+
+// -- equalizer --
+
+
+QStringList Player::eqBands() const {
+    return {"60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz"};
+}
+
+QStringList Player::eqPresets() const {
+    QStringList names;
+    for (int i = 0; i < eqPresetCount; ++i) names << ::eqPresets[i].name;
+    return names;
+}
+
+QVariantList Player::eqGains() const {
+    QVariantList list;
+    for (double g : m_eqGains) list << g;
+    return list;
+}
+
+QString Player::eqPreset() const {
+    for (int i = 0; i < eqPresetCount; ++i)
+        if (std::equal(m_eqGains.begin(), m_eqGains.end(),
+                       ::eqPresets[i].gains))
+            return ::eqPresets[i].name;
+    return "Custom";
+}
+
+void Player::pushEq() {
+    onEngine([e = m_engine, on = m_eqOn, g = m_eqGains, a = m_eqAuto] {
+        e->setEqualizer(on, g, a);
+    });
+}
+
+void Player::setEqOn(bool on) {
+    m_eqOn = on;
+    m_settings.setValue("eqOn", on);
+    pushEq();
+    emit eqChanged();
+}
+
+void Player::setEqAuto(bool on) {
+    m_eqAuto = on;
+    m_settings.setValue("eqAuto", on);
+    pushEq();
+    emit eqChanged();
+}
+
+void Player::setEqBand(int band, double gainDb) {
+    if (band < 0 || band >= m_eqGains.size()) return;
+    m_eqGains[band] = std::clamp(gainDb, -12.0, 12.0);
+    QStringList saved;
+    for (double g : m_eqGains) saved << QString::number(g);
+    m_settings.setValue("eqGains", saved);
+    pushEq();
+    emit eqChanged();
+}
+
+void Player::setEqPreset(const QString &name) {
+    for (int n = 0; n < eqPresetCount; ++n)
+        if (name == ::eqPresets[n].name) {
+            for (int i = 0; i < 5; ++i) m_eqGains[i] = ::eqPresets[n].gains[i];
+            QStringList saved;
+            for (double g : m_eqGains) saved << QString::number(g);
+            m_settings.setValue("eqGains", saved);
+            pushEq();
+            emit eqChanged();
+            return;
+        }
 }
 
 void Player::setPlayingList(qint64 id) {

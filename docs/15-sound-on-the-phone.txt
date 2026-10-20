@@ -1,0 +1,116 @@
+Copyright (c) 2026 Logic Magicians Software
+Released under the GNU General Public License version 3; see the file
+LICENSE.
+
+SOUND ON THE PHONE
+==================
+
+Volume leveling, the volume and the equalizer are in the app's
+Settings (the "..." button).  They apply to the phone only.
+
+Volume and leveling
+-------------------
+
+Each song's loudness was measured once and is stored in the database
+(see Creating the database).  Loudness is in LUFS: a negative number,
+and the closer to zero the louder.  10 LUFS is about twice the loudness
+of 20 LUFS.
+
+  Volume leveling   On: songs louder than the target are turned down to
+                    it.  Off: every song plays at its own level.
+  Target            -30 to -8 LUFS.  Default -10.
+  Volume            0 to 1.  Default 1.
+
+The app cannot make a quiet song louder, only turn a loud one down.  A
+song quieter than the target plays at its own level.  The phone's own
+volume, and that of Bluetooth headphones or a car, then sets how loud
+it is.
+
+The defaults apply only until a slider has been moved.  The app then
+keeps the value, also across updates.  A target of -8 turns leveling
+almost off: most songs are quieter than that.
+
+Equalizer
+---------
+
+Settings > Equalizer... opens the equalizer.  It is off by default; off,
+the sound is not processed at all.
+
+  Equalizer on      Switches it on or off.  The change takes effect
+                    with the next song, not during the one playing.
+  Preset            A list of settings, below.  The box reads "Custom"
+                    when the sliders match none.
+  Sliders           Five bands, -12 to +12 dB each: 60 Hz, 230 Hz,
+                    910 Hz, 3.6 kHz and 14 kHz.
+
+Moving a slider or choosing a preset changes the sound at once while
+the equalizer is on.  The settings are kept between runs.  A boost does
+not lower the overall level; peaks that a boost would push past full
+scale are rounded off.
+
+Presets (dB for the five bands, low to high):
+
+  Flat                  0   0   0   0   0
+  Rock                 +4  +2  -2  +3  +4
+  Metal                +4  -2  -3  +4  +3
+  Punk                 +3   0  -2  +4  +3
+  Pop                  -1  +2  +3  +1  -1
+  Hip-hop / R&B        +6  +4   0  +1  +2
+  Electronic / Dance   +5  +2  -1  +2  +4
+  Jazz                 +3  +2  -2  +2  +3
+  Classical            +3  +1  -1  +2  +3
+  Acoustic             +2  +2  +1  +3  +2
+  Country              +2  +1  +1  +3  +2
+  Vocal                -2  -1  +3  +4  +1
+  Bass boost           +7  +5  +1   0   0
+  Treble boost          0   0   0  +4  +7
+  Loudness             +6  +3   0  +2  +5
+
+The values are starting points, not a standard.
+
+Automatic equalizer
+-------------------
+
+"Automatic: a preset for each song's genre" chooses the preset from the
+song's genre tags each time a song starts.  It works only while the
+equalizer is on.  A line under the switch names the preset in use for
+the song playing.
+
+A genre selects a preset when its name contains one of these words
+(capitals do not matter).  The presets are tried in this order, and the
+first that fits any of the song's genres is used:
+
+  Metal                metal
+  Punk                 punk
+  Hip-hop / R&B        hip hop, hip-hop, rap, r&b, rnb, soul, funk
+  Electronic / Dance   electronic, dance, techno, house, trance, edm,
+                       synth
+  Rock                 rock
+  Jazz                 jazz, big band, swing, bebop, blues
+  Classical            classical, orchestral, symphon, opera
+  Country              country, bluegrass
+  Acoustic             acoustic, folk, celtic, hawaiian, singer
+  Pop                  pop, new wave, 80s, disco
+  Vocal                audiobook, spoken, podcast, speech
+
+A song with several genres gets the first preset in the list that any
+of them selects: "Rock; Metal" gets Metal, and "Workout; Rock" gets
+Rock.  "Symphonic Rock" gets Rock, not Classical, because Rock comes
+first.
+
+A song whose genres match none, for example "Workout", "Roadtrip" or
+"Soundtrack", or a song with no genre, gets the preset or sliders set
+by hand.  Genres are read from the database on the phone, so a
+change made in the database editor reaches the phone with the next
+sync.
+
+Limits
+------
+
+  * With the equalizer on, the app does its own output instead of the
+    player's: the sound is 16-bit stereo.  A song with more than two
+    channels is mixed down to the first two.
+  * Pausing can leave about 150 ms of sound to play out.
+  * When the output device does not take a song's sample rate, the
+    sound is converted to the device's rate, with simple interpolation.
+  * The equalizer is not in the desktop programs.

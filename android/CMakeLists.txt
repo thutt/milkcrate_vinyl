@@ -19,7 +19,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS
 qt_standard_project_setup(REQUIRES 6.8)
 
 qt_add_executable(musicplayer
-    main.cpp trackmodel.cpp trackmodel.h engine.cpp engine.h dblock.h
+    main.cpp equalizer.cpp equalizer.h eqpresets.cpp eqpresets.h trackmodel.cpp trackmodel.h engine.cpp engine.h dblock.h
     dynamic.cpp dynamic.h sync.cpp sync.h playlists.cpp playlists.h
     player.cpp player.h)
 qt_add_qml_module(musicplayer URI MusicPlayer VERSION 1.0 QML_FILES Main.qml)

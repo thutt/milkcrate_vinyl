@@ -100,9 +100,11 @@
   controls stop responding and the car shows "no data".  Capture the phone's
   log (adb logcat, dumpsys media_session, dumpsys activity exit-info) soon
   after it happens, before the app is restarted.
-- [ ] **Pause when the output device changes** (headphones turned off or
-  unplugged): listen for AudioManager.ACTION_AUDIO_BECOMING_NOISY in
-  PlaybackService and send PAUSE.  Requested; tried once and removed.
+- [ ] **Audio must pause when the output changes location** (requested
+  2026-10-19): turning off Bluetooth headphones, or unplugging wired ones, must
+  pause the music, never carry on from the phone's speaker.  Listen for
+  AudioManager.ACTION_AUDIO_BECOMING_NOISY in PlaybackService and send PAUSE.
+  Tried once and removed (it was bundled with the stop-cause guesses).
 - [ ] **Wheel Stop should pause:** ending the service on Stop removes the media
   session, so Play from the wheel has nowhere to go.  Make Stop behave as
   Pause (Engine::handleCommand).

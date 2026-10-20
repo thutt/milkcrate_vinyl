@@ -688,6 +688,78 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: equalizer
+        title: "Equalizer"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: window.width - 32
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 4
+            Switch {
+                text: "Equalizer on"
+                checked: player.eqOn
+                onToggled: player.eqOn = checked
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                opacity: 0.7
+                text: "Switching it on or off takes effect with the next song."
+            }
+            Switch {
+                text: "Automatic: a preset for each song's genre"
+                checked: player.eqAuto
+                onToggled: player.eqAuto = checked
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                opacity: 0.7
+                visible: player.eqAuto
+                text: player.eqAutoName !== ""
+                      ? "This song: " + player.eqAutoName
+                      : "This song has no genre with a preset: the settings " +
+                        "below are used."
+            }
+            ComboBox {
+                Layout.fillWidth: true
+                model: player.eqPresets
+                displayText: player.eqPreset
+                currentIndex: player.eqPresets.indexOf(player.eqPreset)
+                onActivated: player.setEqPreset(currentText)
+            }
+            Repeater {
+                model: 5
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label {
+                        Layout.preferredWidth: 64
+                        text: player.eqBands[index]
+                    }
+                    Slider {
+                        Layout.fillWidth: true
+                        from: -12
+                        to: 12
+                        stepSize: 1
+                        value: player.eqGains[index]
+                        onMoved: player.setEqBand(index, value)
+                    }
+                    Label {
+                        Layout.preferredWidth: 56
+                        horizontalAlignment: Text.AlignRight
+                        text: (player.eqGains[index] > 0 ? "+" : "") +
+                              player.eqGains[index].toFixed(0) + " dB"
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
         id: settings
         title: "Settings"
         modal: true
@@ -721,6 +793,13 @@ ApplicationWindow {
                     to: 1
                     value: player.volume
                     onMoved: player.volume = value
+                }
+            }
+            Button {
+                text: "Equalizer..."
+                onClicked: {
+                    settings.close()
+                    equalizer.open()
                 }
             }
             TextField {
