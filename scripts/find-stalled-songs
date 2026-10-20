@@ -1,0 +1,40 @@
+#!/bin/bash
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Runs under bash or zsh.  Paths are found from the location of this script.
+#
+# Lists the songs that Qt's player does not start by itself (they stay at 0:00
+# until the position is moved):
+#     scripts/find-stalled-songs [--jobs N]
+# The database is the one given with --database, else the one given to
+# scripts/setup.  The paths are printed on standard output, relative to the
+# music root, one per line; nothing is changed.  Needs ffprobe.  See
+# desktop/find_stalled_songs.py.
+set -o errexit
+set -o nounset
+set -o pipefail
+here=$(cd "$(dirname "${0}")" && pwd)
+root=$(dirname "${here}")
+tools_dir="${root}/android/tools"
+# no .pyc files, also in anything Python starts
+export PYTHONDONTWRITEBYTECODE=1
+# the shared modules
+export PYTHONPATH="${root}/desktop:${tools_dir}${PYTHONPATH:+:${PYTHONPATH}}"
+. "${here}/require-venv"
+music_require_venv
+
+
+# The database is the one given with --database, else MILKCRATEVINYL_DATABASE.
+program="${root}/desktop/find_stalled_songs.py"
+if music_option_given --database -d "${@}"; then
+    "${MILKCRATEVINYL_VENV}/bin/python" -B "${program}" "${@}"
+else
+    music_require_database --database
+    "${MILKCRATEVINYL_VENV}/bin/python" -B "${program}" \
+        --database "${MILKCRATEVINYL_DATABASE}" "${@}"
+fi

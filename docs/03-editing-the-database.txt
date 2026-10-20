@@ -32,9 +32,9 @@ Window
 Left side, four tabs:
 
   Files       folders and files, with columns for the main tags,
-              rating, plays, last played, format, duplicate mark and
-              missing standard tags.  Click a heading to sort;
-              right-click it to choose columns.
+              rating, plays, last played, format, duplicate mark,
+              pathname and missing standard tags.  Click a heading to
+              sort; right-click it to choose columns.
   Tags        every tag name and its values.
   Duplicates  songs marked as duplicates of one another.
   Playlists   see 04 to 06.
@@ -52,6 +52,19 @@ tag editor shows one row per tag:
     replaces it in all selected files.
   * "Files" shows how many of the selected files have the tag, when
     not all do.
+
+Above the tag list, "<pathname>" shows where the selected file is.  It
+is not a tag: it is not stored in the file or in the database, and it
+cannot be edited.  It shows the full pathname in two parts: the music
+root, in a dimmed colour, then the relative path, which is what the
+database stores for the file.  Several selected files show their
+common folder and "<N files>".  Hover over it to see the root.
+
+The Pathname column of the Files tab shows the same, per file, with
+the root dimmed.  Sorting by it sorts by the full pathname.  When the
+column is too narrow the start of the root is cut off first, never the
+end of the path.  The root is recorded once in the database; to change
+it, see 02.
 
 Finding files
 -------------

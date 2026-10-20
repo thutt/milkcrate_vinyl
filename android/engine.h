@@ -88,6 +88,7 @@ private:
     void buildOrder(int startRow, bool keepFirst);
     void playCurrent();
     void applyVolume();
+    void kickStalledStart(qint64 dt);  // see engine.cpp
     // The equalizer.  Off, the player plays through its own audio output.  On,
     // the player only decodes: its PCM buffers go through the equalizer into a
     // sink of our own.  The player cannot change between the two while a song
@@ -153,6 +154,8 @@ private:
 
     bool m_eqOn = false, m_eqAuto = false, m_eqRouted = false, m_muted = false;
     const EqPreset *m_autoPreset = nullptr;  // chosen for the current song
+    qint64 m_stalledMs = 0;  // ms the song has been playing at position 0
+    int m_kicks = 0;         // restarts of a stalled song
     bool m_naturalEnd = false;  // the song ended by itself: let it finish
     QVector<double> m_eqGains = QVector<double>(Equalizer::Bands, 0.0);
     Equalizer m_eq;

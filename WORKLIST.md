@@ -37,6 +37,15 @@
 
 - [ ] **Volume leveling (2026-10-15):** `media_file.loudness` (LUFS, EBU R128) and `peak` (dBFS true peak) measured with ffmpeg by `desktop/loudness.py` for all 13,383 files (two Roger Whittaker mp3s were measured afterwards, backup `-loudness-2`). Backups `json/tags.db.bak-before-loudness-columns` and `-loudness`, journal `json/loudness-journal.jsonl`. Player: View > Volume leveling (Off / Track / Album; Track is the default) and Target loudness (default -18 LUFS, remembered); the slider sets the volume and leveling scales it (never above full). Album loudness = power average of the album's tracks (same folder and ALBUM). To do: trial by ear on ~20 tracks and pick the target; measure new files found by a scan; show loudness/peak in the editor.
   - Library: median -13.5 LUFS, 10th percentile -20.6, 90th -7.6; 4,465 files have true peaks above 0 dBFS (loud masters).
+- [ ] **Missing music folder (desktop player, 2026-10-19):** when a database is
+  opened, check that its music root (`meta.root`) exists and say so once:
+  "The music folder does not exist: <path>", with a pointer to
+  `scripts/change-music-root-directory`.  Today each song fails separately with
+  "No such file or directory", which hid a stale root copied from another
+  computer.  Also say how many of the database's songs are found under the
+  root (a sample is enough), so a root one folder too deep or too shallow is
+  caught.  Same check for the phone app: one message when the library folder
+  is missing instead of a "Not on this device" for each song.
 
 ## Proposed, not yet confirmed
 
@@ -114,5 +123,13 @@
 - [ ] **Possible, unconfirmed:** an unplayable song (read error, bad file)
   stops the queue without moving on; a skip with a limit on failures in a row
   was tried once and removed because no error was seen.
+- [x] **Songs that do not start (2026-10-19):** some MP3 files (Voices Carry
+  and others) sit at position 0 with no sound until the position is moved.
+  Reproduced with plain QMediaPlayer in Qt 6.8.3: it happens with a cover
+  picture and a LAME/Xing header together; stripping either one, or the
+  Xing header with ffmpeg -write_xing 0, makes the file play.  Not the picture's
+  pixel format.  Worked around in Engine::kickStalledStart and the desktop
+  player's _check_stalled_start: a move to position 0 after 1.5 s at
+  position 0.  Open: report to Qt; see whether a newer Qt fixes it.
 - [ ] **Add logging** of button presses, device changes and refused
   notification updates (tag MilkcrateVinyl) so the next stop leaves a record.

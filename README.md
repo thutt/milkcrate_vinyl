@@ -68,7 +68,8 @@ counts and last-played dates are the same on both: one version of the truth.
 - **Sync**: File > Sync with Phone in the player or editor, or
   `scripts/sync-phone`.
 - **Setup tools**: `scripts/initialize-database` builds the database from your
-  music folder; `scripts/change-music-root-directory` follows a moved folder.
+  music folder; `scripts/change-music-root-directory` follows a moved folder and
+  `scripts/show-music-root-directory` prints the folder the database records.
 
 ## Quick start
 

@@ -83,6 +83,7 @@ from rating_delegate import (
     STAR_SLOT,
     RatingDelegate,
 )
+from path_display import PathDelegate, ROOT_ROLE, full_path
 from phone_sync_dialog import open_sync_dialog
 
 PATH_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -112,6 +113,7 @@ TREE_COLUMNS = [
     ("Last played", "@last"),
     ("Format", "@format"),
     ("Duplicate", "@dup"),
+    ("Pathname", "@path"),
     ("Missing", ""),
 ]  # the "" column lists the standard tags the file lacks
 
@@ -136,6 +138,7 @@ class MainWindow(QMainWindow):
         self.current: list[str] = []
         self.cells: dict[str, list[QStandardItem]] = {}
         self._quiet = False
+        self._root = ""  # the music root, as the database records it
         self._last_selection = QItemSelection()
 
         self.model = QStandardItemModel(0, len(TREE_COLUMNS), self)
@@ -162,6 +165,12 @@ class MainWindow(QMainWindow):
         )
         self.tree.selectionModel().selectionChanged.connect(
             self._selection_changed
+        )
+        self.path_column = next(
+            i for i, c in enumerate(TREE_COLUMNS) if c[1] == "@path"
+        )
+        self.tree.setItemDelegateForColumn(
+            self.path_column, PathDelegate(self.tree)
         )
         self._setup_columns()
 
@@ -523,7 +532,11 @@ class MainWindow(QMainWindow):
                     (
                         320
                         if i == 0
-                        else 60 if title in ("BPM", "Track", "Year") else 140
+                        else (
+                            60
+                            if title in ("BPM", "Track", "Year")
+                            else 480 if title == "Pathname" else 140
+                        )
                     ),
                 )
 
@@ -582,6 +595,7 @@ class MainWindow(QMainWindow):
         self.model.removeRows(0, self.model.rowCount())
         self.cells.clear()
         dirs: dict[str, QStandardItem] = {}
+        self._root = self.db.root()
         for path in self.db.tags:
             parent = self.model.invisibleRootItem()
             folder = ""
@@ -635,8 +649,15 @@ class MainWindow(QMainWindow):
                     "Click to rate (a first click on a not-rated file gives"
                     " zero stars); double-click = not rated"
                 )
+            if key == "@path":
+                cell.setData(self._root, ROOT_ROLE)
+                cell.setToolTip(
+                    f"Music root: {self._root}\nRelative path: {path}"
+                )
             cell.setText(
-                ", ".join(t.lower() for t in missing_tags(tags))
+                full_path(self._root, path)
+                if key == "@path"
+                else ", ".join(t.lower() for t in missing_tags(tags))
                 if key == ""
                 else (
                     dynamic_playlists.file_format(path)
@@ -671,6 +692,8 @@ class MainWindow(QMainWindow):
             return dynamic_playlists.file_format(path)
         if key == "@dup":
             return self._duplicate_text(path).lower()
+        if key == "@path":
+            return full_path(self._root, path).lower()
         if key == "":
             return ", ".join(missing_tags(self.db.tags[path])).lower()
         values = self.db.tags[path].get(key, [])
@@ -812,7 +835,9 @@ class MainWindow(QMainWindow):
             self.tree.selectionModel().selection()
         )
         self.current = self._selected_files()
-        self.editor.set_files([self.db.tags[p] for p in self.current])
+        self.editor.set_files(
+            [self.db.tags[p] for p in self.current], self._root, self.current
+        )
         self._update_summary()
 
     def _rate(self, index, rating) -> None:
@@ -1312,7 +1337,9 @@ class MainWindow(QMainWindow):
             }  # merging into an existing value drops duplicates
 
         self._write(paths, changes)
-        self.editor.set_files([self.db.tags[p] for p in self.current])
+        self.editor.set_files(
+            [self.db.tags[p] for p in self.current], self._root, self.current
+        )
         self._refresh_overview()
 
     def _overview_selected(self) -> None:
@@ -1437,7 +1464,9 @@ class MainWindow(QMainWindow):
         ):
             return
         self._write(affected, changes)
-        self.editor.set_files([self.db.tags[p] for p in self.current])
+        self.editor.set_files(
+            [self.db.tags[p] for p in self.current], self._root, self.current
+        )
         self._refresh_overview()
 
     # -- saving ------------------------------------------------------------
@@ -1471,7 +1500,9 @@ class MainWindow(QMainWindow):
         paths = list(self.current)
         from_overview = bool(self.overview.selectedItems())
         ok = self._write(paths, lambda _path: changes)
-        self.editor.set_files([self.db.tags[p] for p in paths])
+        self.editor.set_files(
+            [self.db.tags[p] for p in paths], self._root, paths
+        )
         self._refresh_overview()
         if ok and from_overview and self.tabs.currentIndex() == 1:
             for key, values in changes.items():

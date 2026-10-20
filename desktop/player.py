@@ -618,6 +618,12 @@ class MainWindow(QMainWindow):
         self.player.positionChanged.connect(self._position_changed)
         self.player.durationChanged.connect(lambda d: self.seek.setRange(0, d))
         self.player.errorOccurred.connect(self._player_error)
+        # Some files never start (see _check_stalled_start).
+        self.stalled_ms, self.start_kicks = 0, 0
+        self.stall_timer = QTimer(self)
+        self.stall_timer.setInterval(250)
+        self.stall_timer.timeout.connect(self._check_stalled_start)
+        self.stall_timer.start()
 
         self.now_playing = QLabel("Nothing playing")
         self.now_playing.setStyleSheet("font-weight: bold")
@@ -837,6 +843,7 @@ class MainWindow(QMainWindow):
             return
         self.player.setSource(QUrl.fromLocalFile(full))
         self._apply_volume()
+        self.stalled_ms, self.start_kicks = 0, 0
         self.player.play()
         tags = self.db.tags[path]
         title = self.model.text(path, 0)
@@ -1271,6 +1278,25 @@ class MainWindow(QMainWindow):
             for pid in changed:
                 self._playlist_changed(pid)
 
+    def _check_stalled_start(self) -> None:
+        # The player says it plays, the position stays at 0 and no sound comes:
+        # so far MP3 files with both a cover picture and a LAME/Xing header.
+        # Moving the position, to 0 as well, makes the player read the file
+        # again and it plays.
+        if (
+            self.player.playbackState()
+            != QMediaPlayer.PlaybackState.PlayingState
+            or self.player.position() > 0
+        ):
+            self.stalled_ms = 0
+            return
+        self.stalled_ms += self.stall_timer.interval()
+        if self.stalled_ms < 1500 or self.start_kicks >= 3:
+            return
+        self.start_kicks += 1
+        self.stalled_ms = 0
+        self.player.setPosition(0)
+
     def _position_changed(self, position: int) -> None:
         self._count_listening(position)
         if not self.seek.isSliderDown():
@@ -1303,7 +1329,9 @@ class MainWindow(QMainWindow):
             self.table.selectionModel().selection()
         )
         self.current = self._selected_files()
-        self.editor.set_files([self.db.tags[p] for p in self.current])
+        self.editor.set_files(
+            [self.db.tags[p] for p in self.current], self.root, self.current
+        )
         n = len(self.current)
         self.summary.setText(
             "No tracks selected"
@@ -1372,7 +1400,9 @@ class MainWindow(QMainWindow):
             return False
         self.model.refresh(paths)
         self.proxy.invalidate()  # re-sort / re-filter on the new values
-        self.editor.set_files([self.db.tags[p] for p in paths])
+        self.editor.set_files(
+            [self.db.tags[p] for p in paths], self.root, paths
+        )
         self._update_status()
         return True
 

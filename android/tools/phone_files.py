@@ -77,9 +77,17 @@ def copy_files(
     failures: list[tuple[str, str]] = []
     lock = threading.Lock()
     start = time.time()
+    folder = [None, -1]  # the folder of the furthest file started, and its
+    # number: the files go in path order, but threads may start out of order
 
-    def push(item):
+    def push(item, number):
         source, rel, size = item
+        with lock:
+            where = os.path.dirname(rel)
+            if number > folder[1] and where != folder[0]:
+                log(f"folder: {where or '.'}")
+            if number > folder[1]:
+                folder[0], folder[1] = where, number
         err = ""
         for attempt in (1, 2, 3):
             try:
@@ -91,7 +99,7 @@ def copy_files(
         return item, err
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = [pool.submit(push, item) for item in todo]
+        futures = [pool.submit(push, item, n) for n, item in enumerate(todo)]
         for n, future in enumerate(as_completed(futures), 1):
             (source, rel, size), err = future.result()
             with lock:

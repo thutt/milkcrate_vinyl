@@ -104,6 +104,29 @@ by hand.  Genres are read from the database on the phone, so a
 change made in the database editor reaches the phone with the next
 sync.
 
+Files that do not start
+-----------------------
+
+Some MP3 files stay at 0:00 and make no sound although the player says
+it plays; moving the position slider starts them.  The cause is in Qt's
+media code: files that have both a cover picture and a LAME or Xing
+header, which most MP3 encoders write, are affected, and other files may
+be.  When a song is still at 0:00 after 1.5 seconds the app moves to the
+start itself, which makes it play, and tries up to three times.  The song
+then starts about 1.5 seconds late.  The desktop player does the same.
+The file is not changed.
+
+    scripts/find-stalled-songs [--jobs N]
+
+lists the songs that are affected: it probes every track of the database
+with ffprobe (part of ffmpeg) and prints the paths, relative to the music
+root, of the files that have a cover picture and an audio stream that
+starts after time 0.  Standard output holds only the paths; a summary
+goes to standard error.  Nothing is changed.  A library of 13,000 files
+takes about a minute.  In one library, 1,289 of 13,383 songs (all MP3)
+matched, and every one of 20 matches tried did stall, and none of 40
+others.
+
 Limits
 ------
 

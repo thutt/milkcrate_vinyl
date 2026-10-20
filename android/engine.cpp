@@ -360,6 +360,8 @@ void Engine::playCurrent() {
         return;  // stay on this track so the message stays readable
     }
     emit message({});
+    m_stalledMs = 0;
+    m_kicks = 0;
     chooseEqPreset(t.id);
     applyEqGains();
     routeAudio();
@@ -593,9 +595,30 @@ bool Engine::scheduleNext() {
 
 // Every 250 ms: count the time that was played, fade out near the limit, move
 // on when it is reached.
+// Some files never start: the player says it plays, the position stays at 0 and
+// no sound comes.  So far these were MP3 files with both a cover picture and a
+// LAME/Xing header (the sound starts 25 ms in, the picture too).  Moving the
+// position, to 0 as well, makes the player read the file again and it plays.
+void Engine::kickStalledStart(qint64 dt) {
+    if (m_player->position() > 0) {
+        m_stalledMs = 0;
+        return;
+    }
+    m_stalledMs += dt;
+    if (m_stalledMs < 1500 || m_kicks >= 3) return;
+    ++m_kicks;
+    m_stalledMs = 0;
+    qWarning("\"%s\" did not start: moving to the start (try %d)",
+             qPrintable(m_title), m_kicks);
+    m_player->setPosition(0);
+    flushAudio();
+}
+
 void Engine::clockTick() {
     qint64 dt = std::min<qint64>(m_lastTick.restart(), 1000);
     if (!playing) return;
+    kickStalledStart(dt);
+    if (m_player->position() == 0) return;  // not heard yet
     m_heard += dt;
     if (!m_counted && m_heard >= 20000 && m_currentId >= 0) {
         m_counted = true;

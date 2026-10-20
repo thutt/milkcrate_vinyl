@@ -94,8 +94,10 @@ Music copying
   * A song already on the phone with the same size is skipped, so an
     interrupted copy continues where it stopped.
   * The first sync copies the whole library.  Check the free space on
-    the card.  A progress line shows files, gigabytes, speed and the
-    estimated time left; a failed file is tried three times.
+    the card.  A "folder: ..." line names each folder (relative to the
+    music root) as the copy reaches it.  A progress line every 100 files
+    shows files, gigabytes, speed and the estimated time left; a failed
+    file is tried three times.
   * The card's file system cannot hold some characters.  File and folder
     names are cleaned the same way on the phone and the desktop:
       - each of  * ? : " < > |  \ and control characters becomes _

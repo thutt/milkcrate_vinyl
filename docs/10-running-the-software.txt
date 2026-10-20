@@ -18,6 +18,10 @@ Scripts
     scripts/change-music-root-directory --root DIR
                                           point the database at a moved
                                           music folder
+    scripts/show-music-root-directory     print the music folder the
+                                          database records
+    scripts/find-stalled-songs            list songs that do not start by
+                                          themselves (15)
     scripts/sync-phone                    sync with a phone (11)
     scripts/build-for-android [target]    build the phone app (08)
     scripts/setup-android-tools           install the Android tools (08)
@@ -110,6 +114,14 @@ to it.  If the folder moves, run this with the new location.  It counts
 how many database songs exist under NEW_DIR and refuses if there are
 none, makes a backup of the database (FILE.bak-before-change-music-root)
 and changes the stored folder.  The paths of the songs do not change.
+
+    scripts/show-music-root-directory
+
+Prints the music folder the database records, alone on a line, and does
+not change the database.  Exit status 0: printed, and the folder exists;
+1: no folder could be read (no database, or none recorded); 2: printed,
+but the folder does not exist on this computer, which a note on standard
+error says.  Use it to see why songs are not found.
 
 Data and settings
 -----------------

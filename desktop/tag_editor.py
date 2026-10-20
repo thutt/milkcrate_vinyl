@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QCompleter,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
@@ -30,6 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 import tagio
+from path_display import pathname_html
 
 PATH_ROLE = Qt.ItemDataRole.UserRole + 1
 MIXED_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -204,8 +206,26 @@ class TagEditor(QWidget):
         buttons.addWidget(self.remove_value_button)
         buttons.addStretch()
 
+        # <pathname>: a pseudo-tag, the full path of the selected file, with
+        # the music root dimmed; it is not stored in the file or the database
+        self.path_key = QLabel("<pathname>")
+        self.path_key.setEnabled(False)  # dimmed, like a name that is not a tag
+        self.path_value = QLabel()
+        self.path_value.setTextFormat(Qt.TextFormat.RichText)
+        self.path_value.setWordWrap(True)
+        self.path_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.path_row = QWidget()
+        path_layout = QHBoxLayout(self.path_row)
+        path_layout.setContentsMargins(4, 0, 4, 0)
+        path_layout.addWidget(self.path_key, 0, Qt.AlignmentFlag.AlignTop)
+        path_layout.addWidget(self.path_value, 1)
+        self.path_row.hide()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.path_row)
         layout.addWidget(self.table)
         layout.addLayout(buttons)
 
@@ -218,8 +238,15 @@ class TagEditor(QWidget):
 
     # -- model -------------------------------------------------------------
 
-    def set_files(self, tag_dicts: list[dict[str, list[str]]]) -> None:
-        # Show the tags of these files, discarding any pending edits.
+    def set_files(
+        self,
+        tag_dicts: list[dict[str, list[str]]],
+        root: str = "",
+        paths: list[str] | None = None,
+    ) -> None:
+        # Show the tags of these files, discarding any pending edits.  paths
+        # (relative to the music root) are shown as the <pathname> pseudo-tag.
+        self._show_pathname(root, paths or [])
         self._total = len(tag_dicts)
         self.rows = []
         keys = sorted({k for d in tag_dicts for k in d}, key=tagio.sort_key)
@@ -236,6 +263,18 @@ class TagEditor(QWidget):
             )
         self._rebuild()
         self.changed.emit()
+
+    def _show_pathname(self, root: str, paths: list[str]) -> None:
+        dim = self.palette().color(
+            QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text
+        )
+        self.path_value.setText(pathname_html(root, paths, dim))
+        self.path_value.setToolTip(
+            f"Music root: {root}\nThe database stores the part after it."
+            if paths
+            else ""
+        )
+        self.path_row.setVisible(bool(paths))
 
     def revert(self) -> None:
         for row in list(self.rows):

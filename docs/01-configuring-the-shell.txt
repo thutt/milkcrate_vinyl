@@ -67,8 +67,9 @@ MILKCRATEVINYL_DATABASE (--database)
       3. otherwise it stops with an error naming both.
 
     The option is --database (-d) for play, edit-database,
-    initialize-database and change-music-root-directory, and
-    --desktop-db for sync-phone.
+    initialize-database, change-music-root-directory,
+    show-music-root-directory and find-stalled-songs, and --desktop-db
+    for sync-phone.
 
 Variables required per script
 -----------------------------
@@ -80,6 +81,8 @@ Variables required per script
     edit-database                  yes        yes
     initialize-database            yes        yes
     change-music-root-directory    yes        yes
+    show-music-root-directory      yes        yes
+    find-stalled-songs             yes        yes
     sync-phone                     yes   *    yes
     build-for-android              yes   yes
     setup-android-tools            yes   yes
