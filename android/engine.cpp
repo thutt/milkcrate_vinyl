@@ -40,7 +40,10 @@ void Engine::init() {
     connect(m_player, &QMediaPlayer::positionChanged, this,
             [this](qint64 p) { position = p; });
     connect(m_player, &QMediaPlayer::durationChanged, this,
-            [this](qint64 d) { duration = d; });
+            [this](qint64 d) {
+                duration = d;
+                if (playing) pushState();  // the time left needs the length
+            });
     connect(m_player, &QMediaPlayer::playbackStateChanged, this,
             [this](QMediaPlayer::PlaybackState) {
                 bool on =
@@ -58,8 +61,13 @@ void Engine::init() {
             });
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this,
             [this](QMediaPlayer::MediaStatus s) {
+                if (s == QMediaPlayer::StalledMedia ||
+                    s == QMediaPlayer::InvalidMedia)
+                    qWarning("\"%s\": media status %d at %lld ms",
+                             qPrintable(m_title), int(s), m_player->position());
                 if (s != QMediaPlayer::EndOfMedia) return;
                 m_naturalEnd = true;
+                m_primed = true;  // the tail of the song needs no cushion
                 next();
                 m_naturalEnd = false;
             });
@@ -74,6 +82,8 @@ void Engine::init() {
             [this] { m_devicesChanged = true; });
     connect(m_player, &QMediaPlayer::errorOccurred, this,
             [this](QMediaPlayer::Error, const QString &text) {
+                qWarning("\"%s\": cannot play: %s", qPrintable(m_title),
+                         qPrintable(text));
                 emit message("Cannot play: " + text);
             });
 }
@@ -172,6 +182,8 @@ void Engine::closeSink() {
 }
 
 void Engine::flushAudio() {
+    m_primed = false;
+    m_sinceBuffer.invalidate();
     m_eqQueue.clear();
     m_eq.reset();
     m_resamplePos = 0;
@@ -194,11 +206,26 @@ void Engine::openSink(int sourceRate) {
     if (!device.isFormatSupported(format))
         format.setSampleRate(device.preferredFormat().sampleRate());
     m_sink = new QAudioSink(device, format, this);
+    // an underrun: the device wanted sound and the queue had none
+    connect(m_sink, &QAudioSink::stateChanged, this, [this](QAudio::State s) {
+        if (s != QAudio::IdleState || !m_sink) return;
+        qint64 pos = m_player->position(), left = m_player->duration() - pos;
+        if (m_player->playbackState() != QMediaPlayer::PlayingState ||
+            pos <= 0 || left < 500 || !m_sinceBuffer.isValid()) return;
+        qWarning("sound output ran dry at %lld ms: %d bytes queued, last "
+                 "buffer %lld ms ago", pos, int(m_eqQueue.size()),
+                 m_sinceBuffer.isValid() ? m_sinceBuffer.elapsed() : -1);
+        m_primed = false;  // build up the cushion again
+    });
     m_sink->setBufferSize(int(format.bytesForDuration(150000)));
     m_sinkIo = m_sink->start();
     m_sourceRate = sourceRate;
     m_sinkRate = format.sampleRate();
     m_devicesChanged = false;
+    qInfo("sound output \"%s\": %d Hz asked for, %d Hz used, device "
+          "prefers %d Hz, buffer %d bytes", qPrintable(device.description()),
+          sourceRate, format.sampleRate(),
+          device.preferredFormat().sampleRate(), int(m_sink->bufferSize()));
     m_resamplePos = 0;
     m_eq.configure(sourceRate, eqGains());
     m_eq.reset();
@@ -206,6 +233,13 @@ void Engine::openSink(int sourceRate) {
 
 void Engine::drainSink() {
     if (!m_sinkIo || m_eqQueue.isEmpty()) return;
+    if (!m_primed) {
+        if (m_eqQueue.size() < m_sink->format().bytesForDuration(300000))
+            return;
+        m_primed = true;
+        qInfo("sound output started %lld ms after the song, %d bytes queued",
+              m_sinceSource.elapsed(), int(m_eqQueue.size()));
+    }
     qint64 room = m_sink->bytesFree();
     if (room <= 0) return;
     qint64 n = m_sinkIo->write(m_eqQueue.constData(),
@@ -229,6 +263,15 @@ static float sampleAt(const QAudioBuffer &b, int frame, int channel) {
 
 void Engine::onAudioBuffer(const QAudioBuffer &buffer) {
     if (!m_eqOn || !m_eqRouted || !buffer.isValid()) return;
+    if (m_firstBuffer) {
+        m_firstBuffer = false;
+        qInfo("\"%s\": first sound after %lld ms", qPrintable(m_title),
+              m_sinceSource.elapsed());
+    }
+    else if (m_sinceBuffer.isValid() && m_sinceBuffer.elapsed() > 100)
+        qWarning("sound buffer came %lld ms after the one before",
+                 m_sinceBuffer.elapsed());
+    m_sinceBuffer.restart();
     int rate = buffer.format().sampleRate(), frames = buffer.frameCount();
     if (!m_sink || rate != m_sourceRate || m_devicesChanged) openSink(rate);
     if (!m_sinkIo) return;
@@ -306,19 +349,29 @@ void Engine::buildOrder(int startRow, bool keepFirst) {
     m_pos = 0;
 }
 
-void Engine::playQueue(const QVector<QueueItem> &items, int row, bool shuffle) {
+void Engine::playQueue(const QVector<QueueItem> &items, int row, bool shuffle,
+                       qint64 listId) {
     if (row < 0 || row >= items.size()) return;
     endSchedule();
+    m_listId = listId;
     m_queue = items;
     m_shuffle = shuffle;
     buildOrder(row, true);
+    m_visited.clear();
+    m_follow = listIsDynamic();
+    if (m_follow) {  // the songs after this one are chosen from the database
+        const QueueItem first = m_order[m_pos];
+        m_order.clear();
+        m_order.append(first);
+        m_pos = 0;
+    }
     playCurrent();
 }
 
 void Engine::setShuffle(bool on) {
     if (on == m_shuffle) return;
     m_shuffle = on;
-    if (m_queue.isEmpty()) return;
+    if (m_queue.isEmpty() || m_follow) return;  // the next choice follows it
     int row = 0;
     for (int i = 0; i < m_queue.size(); ++i)
         if (m_queue[i].id == m_currentId) {
@@ -330,6 +383,7 @@ void Engine::setShuffle(bool on) {
 
 void Engine::playCurrent() {
     if (m_pos < 0 || m_pos >= m_order.size()) return;
+    m_queueEnded = false;
     const QueueItem &t = m_order[m_pos];
     finishTrack();
     if (m_currentId >= 0 && m_currentId != t.id && m_skippable && !m_counted &&
@@ -339,6 +393,10 @@ void Engine::playCurrent() {
     m_skipped.removeAll(t.id);  // back to a skipped song: the skip is cancelled
     m_skippable = true;
     m_currentId = t.id;
+    m_visited.insert(t.id);
+    qInfo("song %d of %d (id %lld, queue of %d from list %lld): %s - %s",
+          int(m_pos + 1), int(m_order.size()), t.id, int(m_queue.size()),
+          m_listId, qPrintable(t.artist), qPrintable(t.title));
     m_heard = 0;
     m_counted = false;
     m_title = t.title;
@@ -366,6 +424,9 @@ void Engine::playCurrent() {
     applyEqGains();
     routeAudio();
     if (!m_naturalEnd) flushAudio();  // else the last of the song still plays
+    m_firstBuffer = m_eqOn;
+    m_sinceBuffer.invalidate();
+    m_sinceSource.start();
     m_player->setSource(QUrl::fromLocalFile(full));
     m_player->play();
 }
@@ -378,6 +439,15 @@ void Engine::resume() {
 
 void Engine::toggle() {
     if (m_currentId < 0) return;
+    if (m_queueEnded) {  // Play after the end: the list from the top
+        if (m_listId >= 0 && listIsDynamic()) {
+            continueFromList(true);
+            return;
+        }
+        buildOrder(0, true);
+        playCurrent();
+        return;
+    }
     if (m_player->playbackState() == QMediaPlayer::PlayingState) {
         m_player->pause();
         return;
@@ -388,6 +458,8 @@ void Engine::toggle() {
         playCurrent();
         return;
     }
+    m_sinceBuffer.invalidate();  // a pause is not a late buffer
+    m_primed = false;
     m_player->play();
 }
 
@@ -396,14 +468,103 @@ void Engine::next() {
     if (m_section >= 0 && scheduleNext()) return;
     if (m_pos + 1 < m_order.size())
         ++m_pos;
-    else if (m_shuffle)
+    else if (m_follow) {
+        if (!followNext()) {
+            // nothing on the list is left to play: the played songs have left
+            // it and others are coming in, so look again shortly
+            qInfo("nothing left to play on the playlist: reading it again");
+            m_skippable = false;
+            m_queueEnded = true;
+            m_endClock.start();
+            m_player->stop();
+            pushState(true);  // paused: the service and its controls stay
+            QTimer::singleShot(3000, this, [this] { continueFromList(); });
+            return;
+        }
+    } else if (m_shuffle)
         buildOrder(-1, false);  // a new round
     else {
+        qInfo("end of the queue (%d songs, shuffle off): waiting",
+              int(m_order.size()));
         m_skippable = false;
         m_player->stop();
-        stopService();
+        m_queueEnded = true;
+        pushState(true);  // paused: the service and its controls stay
         return;
     }  // end of the queue
+    playCurrent();
+}
+
+// The song after this one comes from the playlist as the database holds it
+// now, so the screen and the player agree on what is next: in order, the
+// first song after this one's place, or any song not yet played if shuffling.
+// False: none is left.
+bool Engine::followNext() {
+    m_queue = playlistItems(m_dbPath, m_listId);
+    const qint64 here = m_order[m_pos].pos;
+    QVector<const QueueItem *> open;
+    for (const QueueItem &t : m_queue)
+        if (!m_visited.contains(t.id)) open.append(&t);
+    const QueueItem *pick = nullptr;
+    if (m_shuffle && !open.isEmpty())
+        pick = open[int(
+            QRandomGenerator::global()->bounded(quint32(open.size())))];
+    else if (!m_shuffle)
+        for (const QueueItem *t : open)
+            if (t->pos > here) {
+                pick = t;
+                break;
+            }
+    if (!pick) return false;
+    m_order.append(*pick);
+    ++m_pos;
+    return true;
+}
+
+bool Engine::listIsDynamic() const {
+    if (m_listId < 0 || m_dbPath.isEmpty()) return false;
+    bool dynamic = false;
+    QMutexLocker lock(&dbLock());
+    const QString name = "kind-" + QUuid::createUuid().toString(QUuid::Id128);
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db.setDatabaseName(m_dbPath);
+        db.setConnectOptions("QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
+        if (db.open()) {
+            QSqlQuery q(db);
+            q.prepare("SELECT rules IS NOT NULL FROM playlist WHERE id = ?");
+            q.addBindValue(m_listId);
+            dynamic = q.exec() && q.next() && q.value(0).toBool();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(name);
+    return dynamic;
+}
+
+// The last song of the queue has gone off the dynamic playlist and the list
+// has been topped up (refillLists, or the timer that started this): play what
+// the list holds now, or wait if it holds nothing.
+void Engine::continueFromList(bool user) {
+    if (!m_queueEnded || m_listId < 0) return;
+    if (!user && (!m_endClock.isValid() || m_endClock.elapsed() > 15000))
+        return;
+    const QVector<QueueItem> items = playlistItems(m_dbPath, m_listId);
+    if (items.isEmpty()) {
+        qInfo("the playlist has no songs left: waiting");
+        return;
+    }
+    qInfo("the playlist now holds %d songs: playing them", int(items.size()));
+    m_queue = items;
+    m_visited.clear();  // a new round
+    buildOrder(m_shuffle ? int(QRandomGenerator::global()->bounded(
+                               quint32(items.size())))
+                         : 0,
+               true);
+    const QueueItem first = m_order[m_pos];
+    m_order.clear();
+    m_order.append(first);
+    m_pos = 0;
     playCurrent();
 }
 
@@ -440,6 +601,7 @@ void Engine::handleCommand(int what, qint64 argument) {
         case Next: next(); break;
         case Previous: previous(); break;
         case Stop:
+            qInfo("stop requested");
             endSchedule();
             m_skippable = false;
             m_player->stop();
@@ -459,10 +621,11 @@ void Engine::handleCommand(int what, qint64 argument) {
 
 // The background service shows the track and the play state in the notification
 // and on the lock screen.
-void Engine::pushState() {
+void Engine::pushState(bool force) {
+    m_sincePush = 0;
 #ifdef Q_OS_ANDROID
     if (m_currentId < 0 ||
-        m_player->playbackState() == QMediaPlayer::StoppedState)
+        (m_player->playbackState() == QMediaPlayer::StoppedState && !force))
         return;
     QJniObject context = QNativeInterface::QAndroidApplication::context();
     QJniObject::callStaticMethod<void>(
@@ -508,6 +671,7 @@ void Engine::startSection() {
         const Section &s = m_sections[m_section];
         if (!s.items.isEmpty()) {
             m_queue = s.items;
+            m_follow = false;
             m_elapsed = 0;
             m_pending = false;
             if (m_fade != 1.0) {
@@ -617,6 +781,9 @@ void Engine::kickStalledStart(qint64 dt) {
 void Engine::clockTick() {
     qint64 dt = std::min<qint64>(m_lastTick.restart(), 1000);
     if (!playing) return;
+    // the time left in the notification and on the car's display is text
+    m_sincePush += dt;
+    if (m_sincePush >= 10000) pushState();
     kickStalledStart(dt);
     if (m_player->position() == 0) return;  // not heard yet
     m_heard += dt;
@@ -900,5 +1067,7 @@ void Engine::refillLists() {
             emit message(problem);
         else if (changed)
             emit playCounted();  // the lists on the screen are read again
+        QMetaObject::invokeMethod(this, [this] { continueFromList(); },
+                                  Qt::QueuedConnection);
     });
 }

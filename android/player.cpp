@@ -447,6 +447,27 @@ QString Player::eqPreset() const {
     return "Custom";
 }
 
+QVariantList Player::eqShownGains() const {
+    if (m_eqAuto)
+        for (int i = 0; i < eqPresetCount; ++i)
+            if (m_eqAutoName == ::eqPresets[i].name) {
+                QVariantList list;
+                for (double g : ::eqPresets[i].gains) list << g;
+                return list;
+            }
+    return eqGains();
+}
+
+QString Player::eqShownPreset() const {
+    return m_eqAuto && !m_eqAutoName.isEmpty() ? m_eqAutoName : eqPreset();
+}
+
+QString Player::eqSummary() const {
+    if (!m_eqOn) return "Equalizer off";
+    return "Equalizer: " + eqShownPreset() +
+           (m_eqAuto && !m_eqAutoName.isEmpty() ? " (auto)" : "");
+}
+
 void Player::pushEq() {
     onEngine([e = m_engine, on = m_eqOn, g = m_eqGains, a = m_eqAuto] {
         e->setEqualizer(on, g, a);
@@ -561,7 +582,9 @@ void Player::playPlaylist(int row) {
             : 0;
     setPlayingList(p->id);
     onEngine([e = m_engine, items = std::move(items), start,
-              shuffle = m_shuffle] { e->playQueue(items, start, shuffle); });
+              shuffle = m_shuffle, id = p->id] {
+        e->playQueue(items, start, shuffle, id);
+    });
 }
 
 // How many library tracks each dynamic playlist's rules select, worked out in
@@ -608,8 +631,8 @@ void Player::playEntry(int row) {
         return;
     }
     setPlayingList(m_openId);
-    onEngine([e = m_engine, items, row, shuffle = m_shuffle] {
-        e->playQueue(items, row, shuffle);
+    onEngine([e = m_engine, items, row, shuffle = m_shuffle, id = m_openId] {
+        e->playQueue(items, row, shuffle, id);
     });
 }
 

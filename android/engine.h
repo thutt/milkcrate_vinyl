@@ -15,6 +15,7 @@
 #include <QAudioBuffer>
 #include <QAudioBufferOutput>
 #include <QAudioOutput>
+#include <QSet>
 #include <QAudioSink>
 #include <QMediaDevices>
 #include <QMediaPlayer>
@@ -51,7 +52,10 @@ public slots:
     void setMuted(bool on);
     void
     resume();  // play the current song if it is not playing; never restarts it
-    void playQueue(const QVector<QueueItem> &items, int row, bool shuffle);
+    // listId: the playlist the items came from (-1: none); a dynamic one is
+    // read again when its items have all been played
+    void playQueue(const QVector<QueueItem> &items, int row, bool shuffle,
+                   qint64 listId = -1);
     void toggle();
     void playSections(const QVector<Section> &sections,
                       bool shuffle);  // a container or sequence
@@ -104,7 +108,14 @@ private:
     void endSchedule(const QString &why = {});
     void clockTick();
     bool scheduleNext();  // true when it moved on by itself
-    void pushState();     // tell the background service what plays
+    // tell the background service what plays; force: also when stopped
+    void pushState(bool force = false);
+    bool listIsDynamic() const;
+    // dynamic playlist: choose the next song from the playlist as it is now
+    bool followNext();
+    // the queue ran out: read the playlist again; user: Play was pressed,
+    // else only soon after the end (never start music out of the blue)
+    void continueFromList(bool user = false);
     void stopService();
     void commitSkips();  // skipped songs leave the dynamic playlists
     void markPlayed(const QVector<qint64> &ids);  // mark these songs as played
@@ -155,7 +166,23 @@ private:
     bool m_eqOn = false, m_eqAuto = false, m_eqRouted = false, m_muted = false;
     const EqPreset *m_autoPreset = nullptr;  // chosen for the current song
     qint64 m_stalledMs = 0;  // ms the song has been playing at position 0
+    qint64 m_sincePush = 0;  // ms since the service was told what plays
     int m_kicks = 0;         // restarts of a stalled song
+    QElapsedTimer m_sinceBuffer;  // since the last decoded buffer (equalizer)
+    QElapsedTimer m_sinceSource;  // since the song was handed to the player
+    bool m_firstBuffer = false;   // the next buffer is the song's first
+    // The sink is fed once about 300 ms of sound is queued.  The decoder
+    // delivers sound only as fast as it plays, so a sink started on the first
+    // buffer runs dry before each next one.
+    bool m_primed = false;
+    // the queue ran out: the player waits, paused, and Play starts it again
+    bool m_queueEnded = false;
+    qint64 m_listId = -1;  // the playlist the queue was read from
+    // a dynamic playlist plays from the database, one song at a time; the
+    // songs already played in this round are not chosen again
+    bool m_follow = false;
+    QSet<qint64> m_visited;
+    QElapsedTimer m_endClock;  // since the queue ran out
     bool m_naturalEnd = false;  // the song ended by itself: let it finish
     QVector<double> m_eqGains = QVector<double>(Equalizer::Bands, 0.0);
     Equalizer m_eq;

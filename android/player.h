@@ -43,6 +43,9 @@ class Player : public QObject {
     Q_PROPERTY(QStringList eqPresets READ eqPresets CONSTANT)
     Q_PROPERTY(QString eqPreset READ eqPreset NOTIFY eqChanged)
     Q_PROPERTY(QStringList eqBands READ eqBands CONSTANT)
+    Q_PROPERTY(QVariantList eqShownGains READ eqShownGains NOTIFY eqChanged)
+    Q_PROPERTY(QString eqShownPreset READ eqShownPreset NOTIFY eqChanged)
+    Q_PROPERTY(QString eqSummary READ eqSummary NOTIFY eqChanged)
     Q_PROPERTY(QString dbPath READ dbPath NOTIFY pathsChanged)
     Q_PROPERTY(QString musicRoot READ musicRoot NOTIFY pathsChanged)
     Q_PROPERTY(QString message READ message NOTIFY messageChanged)
@@ -96,6 +99,11 @@ public:
     QStringList eqPresets() const;
     QString eqPreset() const;  // the preset the gains match, else "Custom"
     QStringList eqBands() const;  // "60 Hz", ...
+    // what is being applied: the song's automatic preset if there is one,
+    // else the manual settings
+    QVariantList eqShownGains() const;
+    QString eqShownPreset() const;
+    QString eqSummary() const;  // one line for the main screen
     void setEqOn(bool on);
     Q_INVOKABLE void setEqBand(int band, double gainDb);
     Q_INVOKABLE void setEqPreset(const QString &name);

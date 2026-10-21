@@ -65,6 +65,19 @@ song ends or is left, the dynamic playlist drops it and adds a matching
 song at the end, as on the desktop (05).  The change reaches the
 desktop at the next sync.
 
+Playing a dynamic playlist, the app takes each next song from the list as
+the database holds it at that moment, not from a copy made at the start.
+What the screen shows as coming up is therefore what plays.  In order,
+the next song is the first one after the current song's place in the
+list; with shuffle on it is any song of the list not yet played.  A song
+is played once in a round, whether it was heard or skipped.  Changes to
+the list meanwhile (replacements, a sync) take effect with the next
+song.  When no song is left, the app reads the list again after a few
+seconds, once the replacements are in, and starts a new round.  If the
+list has no songs, the app stays open, paused, and waits; the
+notification and the player controls stay; Play starts the list again
+when it has songs.  The app does not stop itself at the end of a list.
+
 Containers and sequences
 ------------------------
 
@@ -87,6 +100,15 @@ Notification and lock screen
 
 Controls for play/pause, next, previous, stop, seek and the rating
 buttons (13).
+
+The line under the song's name holds the artist, the rating and the
+time left: "Queen  .  4 *  .  -3:42" (a middle dot and the star symbol on
+the phone).  Songs over an hour show "-1:03:42".  The text is sent when
+a song starts, when you pause, seek or change the rating, and every 10
+seconds while the music plays, so it can be up to 10 seconds behind.
+The progress bar needs no updates and moves by itself.  When the length
+of the song is not known yet, the time is left out.  The same text goes
+to the car's display, if the car shows the artist line.
 
 Updating the playlists
 ----------------------

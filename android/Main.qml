@@ -351,10 +351,20 @@ ApplicationWindow {
                     }
                 }
             }
+            // a button of its own: the equalizer is used while listening.  It
+            // is in the accent colour while it is on
+            ToolButton {
+                text: "EQ"
+                font.bold: true
+                font.pixelSize: 15
+                palette.buttonText: player.eqOn ? Material.accent
+                                                : Material.foreground
+                onClicked: equalizer.open()
+            }
             ToolButton {
                 text: "⋮"
                 font.pixelSize: 22
-                onClicked: settings.open()
+                onClicked: mainMenu.popup()
             }
         }
     }
@@ -607,6 +617,15 @@ ApplicationWindow {
                     color: Material.color(Material.Red)
                     wrapMode: Text.Wrap; font.pixelSize: 12
                 }
+                // what the equalizer is doing, at a glance; the EQ button in
+                // the top bar changes it
+                Label {
+                    Layout.fillWidth: true
+                    text: player.eqSummary
+                    elide: Text.ElideRight
+                    font.pixelSize: 12
+                    opacity: 0.7
+                }
                 RowLayout {
                     Layout.fillWidth: true
                     Label { text: clock(player.position); font.pixelSize: 12 }
@@ -684,7 +703,7 @@ ApplicationWindow {
 
     Connections {
         target: player
-        function onSyncFinished() { settings.close() }
+        function onSyncFinished() { syncDialog.close() }
     }
 
     Dialog {
@@ -725,11 +744,14 @@ ApplicationWindow {
                       : "This song has no genre with a preset: the settings " +
                         "below are used."
             }
+            // while a song's automatic preset applies, the controls show it
+            // and are locked: they would change settings that are not used
             ComboBox {
                 Layout.fillWidth: true
+                enabled: !(player.eqAuto && player.eqAutoName !== "")
                 model: player.eqPresets
-                displayText: player.eqPreset
-                currentIndex: player.eqPresets.indexOf(player.eqPreset)
+                displayText: player.eqShownPreset
+                currentIndex: player.eqPresets.indexOf(player.eqShownPreset)
                 onActivated: player.setEqPreset(currentText)
             }
             Repeater {
@@ -745,23 +767,36 @@ ApplicationWindow {
                         from: -12
                         to: 12
                         stepSize: 1
-                        value: player.eqGains[index]
+                        enabled: !(player.eqAuto && player.eqAutoName !== "")
+                        value: player.eqShownGains[index]
                         onMoved: player.setEqBand(index, value)
                     }
                     Label {
                         Layout.preferredWidth: 56
                         horizontalAlignment: Text.AlignRight
-                        text: (player.eqGains[index] > 0 ? "+" : "") +
-                              player.eqGains[index].toFixed(0) + " dB"
+                        text: (player.eqShownGains[index] > 0 ? "+" : "") +
+                              player.eqShownGains[index].toFixed(0) + " dB"
                     }
                 }
             }
         }
     }
 
+    // the three-dot menu: one entry per concern, each with a dialog of its own
+    Menu {
+        id: mainMenu
+        MenuItem { text: "Volume..."; onTriggered: volumeDialog.open() }
+        MenuItem { text: "Equalizer..."; onTriggered: equalizer.open() }
+        MenuItem { text: "Library..."; onTriggered: libraryDialog.open() }
+        MenuItem {
+            text: "Sync with the desktop..."
+            onTriggered: syncDialog.open()
+        }
+    }
+
     Dialog {
-        id: settings
-        title: "Settings"
+        id: volumeDialog
+        title: "Volume"
         modal: true
         anchors.centerIn: Overlay.overlay
         width: window.width - 32
@@ -795,13 +830,19 @@ ApplicationWindow {
                     onMoved: player.volume = value
                 }
             }
-            Button {
-                text: "Equalizer..."
-                onClicked: {
-                    settings.close()
-                    equalizer.open()
-                }
-            }
+        }
+    }
+
+    Dialog {
+        id: libraryDialog
+        title: "Library"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: window.width - 32
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
             TextField {
                 id: dbField
                 Layout.fillWidth: true
@@ -818,15 +859,35 @@ ApplicationWindow {
                 text: "Load library"
                 onClicked: {
                     player.setPaths(dbField.text, rootField.text)
-                    settings.close()
+                    libraryDialog.close()
                 }
             }
-            ToolSeparator { Layout.fillWidth: true; orientation: Qt.Horizontal }
+            Label {
+                Layout.fillWidth: true
+                text: player.message
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                opacity: 0.7
+            }
+        }
+    }
+
+    Dialog {
+        id: syncDialog
+        title: "Sync with the desktop"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: window.width - 32
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
             RowLayout {
                 Layout.fillWidth: true
                 Label {
                     Layout.fillWidth: true
-                    text: "Sync with the desktop"
+                    text: player.syncRunning ? "Waiting for the desktop"
+                                             : "Not running"
                     font.bold: true
                 }
                 Button {
@@ -866,13 +927,6 @@ ApplicationWindow {
                 text: player.syncStatus
                 wrapMode: Text.Wrap
                 font.pixelSize: 12
-            }
-            Label {
-                Layout.fillWidth: true
-                text: player.message
-                wrapMode: Text.Wrap
-                font.pixelSize: 12
-                opacity: 0.7
             }
         }
     }

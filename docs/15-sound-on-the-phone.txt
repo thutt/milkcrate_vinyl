@@ -5,8 +5,8 @@ LICENSE.
 SOUND ON THE PHONE
 ==================
 
-Volume leveling, the volume and the equalizer are in the app's
-Settings (the "..." button).  They apply to the phone only.
+Volume leveling and the volume are under "..." > Volume.  The equalizer
+is the EQ button in the top bar.  They apply to the phone only.
 
 Volume and leveling
 -------------------
@@ -33,8 +33,14 @@ almost off: most songs are quieter than that.
 Equalizer
 ---------
 
-Settings > Equalizer... opens the equalizer.  It is off by default; off,
-the sound is not processed at all.
+The EQ button in the top bar opens the equalizer with one tap, from any
+tab.  It is in the accent colour while the equalizer is on.  "..." >
+Equalizer... opens it too.  It is off by default; off, the sound is not
+processed at all.
+
+A line above the seek bar always says what the equalizer is doing:
+"Equalizer off", "Equalizer: Rock" or "Equalizer: Classical (auto)".
+It is text only; the EQ button changes the settings.
 
   Equalizer on      Switches it on or off.  The change takes effect
                     with the next song, not during the one playing.
@@ -68,13 +74,50 @@ Presets (dB for the five bands, low to high):
 
 The values are starting points, not a standard.
 
+Manual and automatic settings
+-----------------------------
+
+The equalizer works in one of two ways, chosen by the switch
+"Automatic: a preset for each song's genre":
+
+                 Manual (switch off)     Automatic (switch on)
+  Who chooses    You: a preset or the    The app, for each song, from
+                 sliders.                the song's genre tags.
+  Applies to     Every song.             One song at a time; the next
+                 It stays until you      song may get another preset.
+                 change it.
+  Preset box     Editable.               Shows the song's preset;
+  and sliders                            locked.
+  Saved          Yes, between runs.      The switch is saved; the
+                                         songs' presets are not.
+  Song with no   Not applicable.         The manual settings are used.
+  matching genre
+
+The manual settings are one set for the whole app.  Automatic mode
+never changes them.  It sets them aside while a song has a preset and
+uses them again for a song that has none.  Switching Automatic off
+returns to them, with the preset box and the sliders unlocked.
+
+In automatic mode the preset is chosen when a song starts and is kept
+until it ends.  Changing the switch during a song takes effect at once
+for that song.  Moving the sliders is not possible while a song has a
+preset, so to adjust the sound, switch Automatic off, or play a song
+that has no preset.
+
+The line above the seek bar tells the two apart: "Equalizer: Rock" is
+the manual setting and "Equalizer: Rock (auto)" is a preset chosen for
+the song.  Both only apply while the equalizer is on.
+
 Automatic equalizer
 -------------------
 
 "Automatic: a preset for each song's genre" chooses the preset from the
 song's genre tags each time a song starts.  It works only while the
 equalizer is on.  A line under the switch names the preset in use for
-the song playing.
+the song playing, and the preset box and the sliders show that preset.
+They are locked while it applies, because changing them would change
+settings that are not used.  A song with no matching genre uses the
+manual settings, and the box and sliders unlock.
 
 A genre selects a preset when its name contains one of these words
 (capitals do not matter).  The presets are tried in this order, and the
@@ -103,6 +146,18 @@ A song whose genres match none, for example "Workout", "Roadtrip" or
 by hand.  Genres are read from the database on the phone, so a
 change made in the database editor reaches the phone with the next
 sync.
+
+Output changes
+--------------
+
+The music pauses when its output goes away: Bluetooth headphones turned
+off or out of range, a car unit that switches off or disconnects, wired
+or USB headphones unplugged.  It never carries on from the phone's
+speaker.  Connecting an output does not start or stop anything.  Press
+Play to continue.  The pause is logged under the tag MilkcrateVinyl.
+
+The pause works while the app has a song loaded, because it is done by
+the playback service.
 
 Files that do not start
 -----------------------

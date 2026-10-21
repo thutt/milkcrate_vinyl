@@ -20,8 +20,8 @@ Install the app first (09).
 Wi-Fi sync from the player or editor
 ------------------------------------
 
-1. On the phone: open the app, tap the "..." button (Settings), under
-   "Sync with the desktop" tap Start.  The app shows a pairing code, the
+1. On the phone: open the app, tap the "..." button, choose "Sync with
+   the desktop..." and tap Start.  The app shows a pairing code, the
    phone's address and the port (8765).
 2. On the desktop: File > Sync with Phone...
 3. Enter the pairing code.  The last five codes are remembered, one per
@@ -110,7 +110,7 @@ After syncing
 -------------
 
 The app reloads the database when it returns to the foreground.  If the
-song list is empty, open Settings, check that the database and music
+song list is empty, open "..." > Library, check that the database and music
 folder paths are those of the library folder, and tap Load library.
 
 Errors
@@ -119,7 +119,7 @@ Errors
   "Close the desktop player and editor first"
       Close them, or use --force.
   "The phone's sync server was not found"
-      Start the sync on the phone (Settings > Sync with the desktop >
+      Start the sync on the phone ("..." > Sync with the desktop... >
       Start), check that both are on the same Wi-Fi, or give the
       address.
   "... refused the pairing code"

@@ -34,6 +34,7 @@ struct QueueItem {
     QString path, title, artist, album;
     double loudness = 0;
     bool measured = false;
+    qint64 pos = -1;  // place in the playlist it came from
 };
 
 class TrackModel : public QAbstractListModel {

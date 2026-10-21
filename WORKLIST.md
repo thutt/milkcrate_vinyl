@@ -109,11 +109,13 @@
   controls stop responding and the car shows "no data".  Capture the phone's
   log (adb logcat, dumpsys media_session, dumpsys activity exit-info) soon
   after it happens, before the app is restarted.
-- [ ] **Audio must pause when the output changes location** (requested
+- [x] **Audio must pause when the output changes location** (requested
   2026-10-19): turning off Bluetooth headphones, or unplugging wired ones, must
   pause the music, never carry on from the phone's speaker.  Listen for
   AudioManager.ACTION_AUDIO_BECOMING_NOISY in PlaybackService and send PAUSE.
   Tried once and removed (it was bundled with the stop-cause guesses).
+  Restored 2026-10-20 (BECOMING_NOISY plus an AudioDeviceCallback); not yet
+  tried with the car or real headphones.
 - [ ] **Wheel Stop should pause:** ending the service on Stop removes the media
   session, so Play from the wheel has nowhere to go.  Make Stop behave as
   Pause (Engine::handleCommand).
@@ -131,5 +133,13 @@
   pixel format.  Worked around in Engine::kickStalledStart and the desktop
   player's _check_stalled_start: a move to position 0 after 1.5 s at
   position 0.  Open: report to Qt; see whether a newer Qt fixes it.
+- [x] **Playback stopped at the end of a dynamic playlist (2026-10-20):** the
+  queue is a copy of the list read when playback starts; the played songs
+  leave the list and replacements come in, but the copy was never read again,
+  so playback ended after the original songs (3 in the test, 6 to 10 in the
+  real lists) with no message.  The engine now reads the list again when the
+  copy runs out and waits, paused, when there is nothing to play; it no longer
+  stops the service at the end of a queue.  A containers and sequences end
+  ("Sequence complete.", "Nothing to play.") still stops the service.
 - [ ] **Add logging** of button presses, device changes and refused
   notification updates (tag MilkcrateVinyl) so the next stop leaves a record.

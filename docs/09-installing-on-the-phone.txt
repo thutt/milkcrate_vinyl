@@ -81,8 +81,8 @@ If none exists, the app uses its own folder (on the SD card if there is
 one) and shows an empty song list.  To fill the library see
 11-getting-the-library-onto-the-phone.txt.
 
-The database and music folder in use are shown in Settings (the "..."
-button in the top bar).  They can be changed there: enter the path of
+The database and music folder in use are shown under "..." > Library
+(the "..." button in the top bar).  They can be changed there: enter the path of
 tags.db and of the music folder and tap Load library.
 
 Emulator

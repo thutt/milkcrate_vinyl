@@ -11,15 +11,22 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.drawable.Icon;
+import android.media.AudioDeviceCallback;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.util.Log;
 
 /**
  * Keeps the music playing in the background: a foreground service with a media
@@ -48,6 +55,51 @@ public class PlaybackService extends Service {
                     // without the generated R)
     private MediaSession session;
     private boolean foreground = false;
+    private AudioManager audioManager;
+
+    // Headphones unplugged or turned off: Android announces it here.
+    private final BroadcastReceiver noisy = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            pauseForOutput("becoming noisy");
+        }
+    };
+
+    // A Bluetooth, wired, USB or car output went away.  The built-in outputs
+    // are ignored: they come and go with calls and the like.
+    private final AudioDeviceCallback outputs = new AudioDeviceCallback() {
+        @Override
+        public void onAudioDevicesRemoved(AudioDeviceInfo[] removed) {
+            for (AudioDeviceInfo device : removed) {
+                if (!device.isSink() || !external(device.getType())) continue;
+                pauseForOutput("output removed, type " + device.getType());
+                return;
+            }
+        }
+    };
+
+    private static boolean external(int type) {
+        switch (type) {
+            case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+            case AudioDeviceInfo.TYPE_BLUETOOTH_SCO:
+            case AudioDeviceInfo.TYPE_WIRED_HEADPHONES:
+            case AudioDeviceInfo.TYPE_WIRED_HEADSET:
+            case AudioDeviceInfo.TYPE_USB_DEVICE:
+            case AudioDeviceInfo.TYPE_USB_HEADSET:
+            case AudioDeviceInfo.TYPE_USB_ACCESSORY:
+            case AudioDeviceInfo.TYPE_HEARING_AID:
+            case AudioDeviceInfo.TYPE_BLE_HEADSET:
+            case AudioDeviceInfo.TYPE_BLE_SPEAKER:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private void pauseForOutput(String why) {
+        Log.i("MilkcrateVinyl", "pausing: " + why);
+        send(PAUSE, 0);
+    }
 
     /** Called from C++ whenever the track or the play state changes. */
     public static void update(Context context, String title, String artist,
@@ -124,6 +176,11 @@ public class PlaybackService extends Service {
             }
         });
         session.setActive(true);
+        audioManager = getSystemService(AudioManager.class);
+        audioManager.registerAudioDeviceCallback(outputs, new Handler());
+        registerReceiver(
+            noisy,
+            new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
     }
 
     private static void send(int what, long argument) {
@@ -173,15 +230,29 @@ public class PlaybackService extends Service {
         return rating + " \u2605";
     }
 
+    // "  .  -3:42" (a middle dot): the time left, as text (the progress bar
+    // moves by itself between updates; this changes only when the app sends
+    // one)
+    private static String left(long position, long duration) {
+        if (duration <= 0 || position < 0 || position > duration) return "";
+        long seconds = (duration - position + 500) / 1000;
+        long hours = seconds / 3600, minutes = seconds / 60 % 60;
+        return "  \u00b7  -" +
+            (hours > 0 ? String.format("%d:%02d:%02d", hours, minutes,
+                                       seconds % 60)
+                       : String.format("%d:%02d", minutes, seconds % 60));
+    }
+
     private void show(String title, String artist, boolean playing,
                       long position, long duration, int rating) {
+        String line = artist + "  \u00b7  " + stars(rating) +
+                      left(position, duration);
         session.setMetadata(
             new MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST,
-                           artist + "  \u00b7  " +
-                               stars(rating))  // the lock screen shows only
-                                               // title and artist
+                           line)  // the lock screen shows only title and
+                                  // artist
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
                 .build());
         session.setPlaybackState(
@@ -209,7 +280,7 @@ public class PlaybackService extends Service {
             new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle(title)
-                .setContentText(artist + "  \u00b7  " + stars(rating))
+                .setContentText(line)
                 .setContentIntent(PendingIntent.getActivity(
                     this, 0, open, PendingIntent.FLAG_IMMUTABLE))
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -253,6 +324,8 @@ public class PlaybackService extends Service {
 
     @Override
     public void onDestroy() {
+        audioManager.unregisterAudioDeviceCallback(outputs);
+        unregisterReceiver(noisy);
         if (session != null) {
             session.setActive(false);
             session.release();
