@@ -81,7 +81,13 @@ private:
 class EntryModel : public QAbstractListModel {
     Q_OBJECT
 public:
-    enum Role { IdRole = Qt::UserRole + 1, TitleRole, ArtistRole, AlbumRole };
+    enum Role {
+        IdRole = Qt::UserRole + 1,
+        TitleRole,
+        ArtistRole,
+        AlbumRole,
+        RatingRole
+    };
     explicit EntryModel(QObject *parent = nullptr)
         : QAbstractListModel(parent) {}
     int rowCount(const QModelIndex &parent = {}) const override {
@@ -90,6 +96,7 @@ public:
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
     void setItems(const QVector<QueueItem> &items);
+    void setRating(qint64 id, int rating);  // a row shows it at once
     const QVector<QueueItem> &items() const { return m_items; }
 
 private:

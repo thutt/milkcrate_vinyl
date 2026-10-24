@@ -135,7 +135,9 @@ keep the other values:
     removes the chosen one from each file that has it.
 
 Both ask for confirmation, naming how many files change, and are stored
-at once without Save.  Unsaved edits are first saved or discarded.
+at once without Save.  Unsaved edits are first saved or discarded.  The
+player's tag editor has the same two buttons and works the same way on
+the selected tracks.
 
 Tags tab
 --------
@@ -147,6 +149,11 @@ selects its files in the Files tab.
 To change a value in all files, double-click it, type the new text,
 and press Enter.  After confirmation it is stored at once.  In a list
 tag, "A; B" splits the value into two.
+
+To delete a whole tag (every value, from every file that has it), select
+its row, right-click > Delete ... from all files, or press Delete.
+After confirmation it is stored at once.  The music files are not
+touched.  Filters do not limit this: the tag goes from all files.
 
 Filters:
 
@@ -184,6 +191,43 @@ its duplicates.
 
 Marks exist only in the database.
 
+BPM and loudness of selected files
+----------------------------------
+
+Select files, or folders (a folder stands for the files in it), then
+choose from the Analyse menu or right-click > Analyse:
+
+  Detect BPM         Estimates the tempo from the sound, as
+                     desktop/bpm_batch.py does for the whole library.
+                     Files that already have a BPM are not analysed.
+                     A result rated high or medium reliability becomes
+                     the BPM tag; a low one is listed and the file
+                     stays at 0.
+  Measure loudness   Measures every selected file (EBU R128, with
+                     ffmpeg) and stores the loudness and the true peak
+                     that volume leveling uses.  A value already there
+                     is replaced.
+
+A progress window with a Cancel button shows the work; more than 500
+files asks first.  The results are stored in the database only; the
+media files are not touched.  Each action backs up the database
+(.bak-before-bpm-detect or .bak-before-loudness) and appends to a
+journal (bpm-detect-journal.jsonl or loudness-journal.jsonl) beside the
+database.  Unsaved tag edits are saved or discarded first.  The player
+has the same two entries in the right-click menu of the song list.
+
+Scrubbing tags
+--------------
+
+To delete whole tags from the selected files only, select the files or
+folders and choose Tags > Scrub Tags from Selected Files, or right-click
+> Scrub tags.  The dialog lists every tag name the selected files have,
+with the number of files that have it.  Tick the ones to delete (All but
+standard ticks everything except TITLE, ARTIST, ALBUM, GENRE,
+TRACKNUMBER and DATE), then confirm.  All values of a ticked tag are
+deleted from the database; the music files are not touched, and the
+change is saved at once, like the other bulk changes.
+
 Adding and removing files
 -------------------------
 
@@ -193,5 +237,13 @@ Adding and removing files
     with their tags, plays, ratings and playlist entries, from the
     database.  The files on disk stay, and a later scan lists them as
     new if they are still in the music folder.
+  * The same dialog has a checkbox, "Also delete the files from the disk,
+    and the folders that become empty".  Checked, the files are deleted
+    from the music folder (they cannot be recovered; the database can,
+    from the backup and the journal), and so is each folder that is then
+    empty, going up to but not including the music folder.  A folder
+    that still holds other files, such as cover art, stays.  Files that
+    cannot be deleted are listed afterwards.  Nothing outside the music
+    folder is ever deleted.  Copies on the phone are not deleted (11).
 
 File > Sync with Phone... merges plays and ratings from the phone.

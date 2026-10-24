@@ -97,6 +97,9 @@ View menu:
 File menu: Open Database..., Save Tags, Sync with Phone..., Quit.
 Tag edits are stored by Save Tags and changes only the database.
 
+Right-click songs > Detect BPM, Measure loudness: for the selected songs,
+stored in the database only (03).
+
 Editor
 ------
 

@@ -13,10 +13,12 @@ import json
 import os
 import socket
 import subprocess
+import threading
 import urllib.parse
 
 PORT = 8765
 DISCOVERY_PORT = 8766
+CONNECT = 10  # seconds to wait for the phone to accept a connection
 
 
 class LinkError(RuntimeError):
@@ -64,9 +66,25 @@ class Link:
     def __init__(self, host: str, code: str):
         self.host, self.code = host, code
         self.info: dict = {}
+        self.aborted = False
+        self.lock = threading.Lock()
+        self.sockets: list[socket.socket] = []  # in use, for abort()
+
+    def abort(self) -> None:
+        # Make every request, running or later, fail at once (a phone that
+        # went to sleep would otherwise keep a request waiting for its
+        # timeout).
+        with self.lock:
+            self.aborted = True
+            sockets = list(self.sockets)
+        for sock in sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
     def _connection(self) -> http.client.HTTPConnection:
-        return http.client.HTTPConnection(self.host, PORT, timeout=60)
+        return http.client.HTTPConnection(self.host, PORT, timeout=CONNECT)
 
     def request(
         self,
@@ -82,6 +100,12 @@ class Link:
             h["Content-Length"] = str(length)
         conn = self._connection()
         try:
+            conn.connect()
+            conn.sock.settimeout(60)
+            with self.lock:
+                if self.aborted:
+                    raise OSError("stopped")
+                self.sockets.append(conn.sock)
             conn.request(method, path, body=body, headers=h)
             r = conn.getresponse()
             data = r.read()
@@ -89,6 +113,9 @@ class Link:
         except (OSError, http.client.HTTPException) as e:
             raise LinkError(f"{method} {path}: {e}") from e
         finally:
+            with self.lock:
+                if conn.sock in self.sockets:
+                    self.sockets.remove(conn.sock)
             conn.close()
 
     def _ok(self, method, path, **kw):

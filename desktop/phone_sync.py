@@ -40,6 +40,9 @@ class Report:
     playlists_changed: set = field(default_factory=set)
     problems: list = field(default_factory=list)
     paths: list = field(default_factory=list)  # tracks whose stats changed
+    # (path, rating, plays, last played) the desktop had before, for each
+    # track that took its stats from the phone
+    changes: list = field(default_factory=list)
 
     def text(self) -> str:
         if self.problems:
@@ -89,9 +92,9 @@ def merge(db, phone_path: str) -> Report:
             if path not in db.ids:
                 continue
             fid = db.ids[path]
-            mine_plays, mine = db.con.execute(
-                "SELECT play_count, stats_modified FROM media_file WHERE"
-                " id = ?",
+            mine_plays, mine, mine_rating, mine_last = db.con.execute(
+                "SELECT play_count, stats_modified, rating, last_played FROM"
+                " media_file WHERE id = ?",
                 (fid,),
             ).fetchone()
             if mine is not None and mine >= modified:
@@ -108,6 +111,7 @@ def merge(db, phone_path: str) -> Report:
             db.stats[path] = (rating, plays or 0, last)
             report.stats_from_phone += 1
             report.paths.append(path)
+            report.changes.append((path, mine_rating, mine_plays, mine_last))
             report.plays_from_phone += max(0, (plays or 0) - (mine_plays or 0))
 
         if "removed_at" in {

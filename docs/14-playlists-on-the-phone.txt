@@ -110,6 +110,12 @@ The progress bar needs no updates and moves by itself.  When the length
 of the song is not known yet, the time is left out.  The same text goes
 to the car's display, if the car shows the artist line.
 
+Many head units show the title, the artist and the album, one line
+each, and cannot show more.  The artist and the album are sent as they
+are.  The title line alternates every 10 seconds between the song's
+title and the rating with the time left ("4 *  .  -3:42"); each song
+starts with its title, and a paused player shows the title.
+
 Updating the playlists
 ----------------------
 

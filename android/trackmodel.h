@@ -23,6 +23,7 @@ struct Track {
     int number = 0;  // track number, 0 = none
     double loudness = 0;  // LUFS
     bool measured = false;
+    int rating = -1;  // 0 to 5 stars, -1 = not rated
     QString key;  // search text: lower case words separated by single spaces
     QString sortArtist, sortTitle, sortAlbum;
 };
@@ -35,6 +36,7 @@ struct QueueItem {
     double loudness = 0;
     bool measured = false;
     qint64 pos = -1;  // place in the playlist it came from
+    int rating = -1;  // 0 to 5 stars, -1 = not rated (for the lists)
 };
 
 class TrackModel : public QAbstractListModel {
@@ -42,7 +44,13 @@ class TrackModel : public QAbstractListModel {
     Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
     Q_PROPERTY(int total READ total NOTIFY countChanged)
 public:
-    enum Role { IdRole = Qt::UserRole + 1, TitleRole, ArtistRole, AlbumRole };
+    enum Role {
+        IdRole = Qt::UserRole + 1,
+        TitleRole,
+        ArtistRole,
+        AlbumRole,
+        RatingRole
+    };
     explicit TrackModel(QObject *parent = nullptr)
         : QAbstractListModel(parent) {}
 
@@ -62,6 +70,7 @@ public:
     QVector<QueueItem> viewItems() const;  // the list as shown, for a queue
 
     void setQuery(const QString &text);
+    void setRating(qint64 id, int rating);  // a row shows it at once
     void setSort(const QString &key);  // "artist", "title", "album" or "path"
 signals:
     void countChanged();

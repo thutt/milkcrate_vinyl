@@ -34,7 +34,24 @@ Wi-Fi sync from the player or editor
 The phone and the computer must be on the same Wi-Fi.  The phone is
 found by a UDP broadcast (port 8766); if that does not work, enter its
 address.  With USB tethering the phone is reached through the gateway.
-The sync server runs in the app: do not close it during the sync.
+The sync server runs in the app: do not close it during the sync.  While
+it runs, its dialog on the phone is modal: a tap outside it or the Back
+key does not close it; use its Close button, which also stops the sync
+server.
+
+Stopping a sync
+---------------
+
+Click Close on the desktop (or press Escape) while a transfer runs: the
+transfer stops and the dialog closes at once.  The requests in use are
+broken off, so a phone that went to sleep, and does not answer, cannot
+keep the dialog open.  Files already copied stay on the phone, and the
+next sync copies the rest.
+
+If the phone goes away during the copy (its sync dialog closed, the app
+stopped, the Wi-Fi lost), the desktop gives up after six files in a row
+fail, with "The phone stopped answering; giving up", and the dialog stays
+open with the log.  Nothing is hung; Close works.
 
 Command line
 ------------
@@ -105,6 +122,22 @@ Music copying
       - names that differ only in capital letters are one name; the
         file that is not the primary is skipped and listed
   * Songs removed from the library are not deleted from the phone.
+
+Reviewing what the phone changed
+--------------------------------
+
+Songs often cannot be rated while driving.  When a sync from the player
+or editor takes plays or ratings from the phone, a "Changes from the
+phone" window opens after the sync dialog closes.  It lists those songs
+with their rating, what the desktop had before ("Was"), the play count
+and the last played time.  Click the stars to rate a song, or select
+songs and press 0 to 5 (Delete: not rated); right-click > Rate does the
+same.  "Only songs that are not rated" shows the ones still to rate.
+Each change is stored at once and, being newer than the phone's, goes to
+the phone at the next sync.
+
+File > Review Phone Changes reopens the list of the last sync until the
+program is closed.
 
 After syncing
 -------------

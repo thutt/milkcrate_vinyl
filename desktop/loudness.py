@@ -22,52 +22,18 @@ from __future__ import annotations
 import csv
 import json
 import os
-import re
 import sqlite3
-import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
+
+from loudness_measure import measure
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 JSON = os.path.join(HERE, "..", "json")
 DB = os.path.join(JSON, "tags.db")
 RESULTS = os.path.join(JSON, "loudness-results.csv")
-
-
-def measure(path: str):
-    proc = subprocess.run(
-        [
-            "ffmpeg",
-            "-nostats",
-            "-hide_banner",
-            "-i",
-            path,
-            "-vn",
-            "-af",
-            "ebur128=peak=true",
-            "-f",
-            "null",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-        errors="replace",
-    )
-    summary = proc.stderr.rsplit("Summary:", 1)[-1]
-    integrated = re.search(r"I:\s+(-?[\d.]+|-inf)\s+LUFS", summary)
-    peak = re.search(r"Peak:\s+(-?[\d.]+|-inf)\s+dBFS", summary)
-    if (
-        proc.returncode
-        or not integrated
-        or not peak
-        or "inf" in integrated.group(1)
-    ):
-        return None
-    return float(integrated.group(1)), float(
-        "-120" if "inf" in peak.group(1) else peak.group(1)
-    )
 
 
 def _one(args):

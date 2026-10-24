@@ -30,6 +30,7 @@
 #endif
 
 void Engine::init() {
+    m_writes.setMaxThreadCount(1);  // the writes keep their order
     m_player = new QMediaPlayer(this);
     m_audio = new QAudioOutput(this);
     m_player->setAudioOutput(m_audio);
@@ -117,7 +118,12 @@ void Engine::setEqualizer(bool on, const QVector<double> &gains,
     applyEqGains();
 }
 
+// The song keeps playing through the sink after the equalizer is turned off
+// (the player changes its output only when the next song is loaded), with flat
+// gains.
 const double *Engine::eqGains() const {
+    static const double flat[Equalizer::Bands] = {0, 0, 0, 0, 0};
+    if (!m_eqOn) return flat;
     return m_eqAuto && m_autoPreset ? m_autoPreset->gains
                                     : m_eqGains.constData();
 }
@@ -132,10 +138,20 @@ void Engine::chooseEqPreset(qint64 id) {
     emit eqChosen(m_autoPreset ? QString(m_autoPreset->name) : QString());
 }
 
+// The engine thread also feeds the sound; time spent waiting here is time the
+// sound is not fed.  Only the code that writes the database, or replaces the
+// file, holds dbLock(); the engine's reads (genres, rating, kind of list) take
+// no lock, because a long rule evaluation in another thread kept the engine
+// waiting for over a second at the start of a song, and the sound stuttered.
+static void noteWait(const QElapsedTimer &since, const char *what) {
+    if (since.elapsed() > 50)
+        qWarning("engine thread waited %lld ms for the database (%s)",
+                 since.elapsed(), what);
+}
+
 QStringList Engine::readGenres(qint64 id) {
     QStringList genres;
     if (m_dbPath.isEmpty()) return genres;
-    QMutexLocker lock(&dbLock());
     const QString name = "genre-" + QUuid::createUuid().toString(QUuid::Id128);
     {
         QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
@@ -160,11 +176,13 @@ void Engine::routeAudio() {
     if (m_eqOn) {
         m_player->setAudioOutput(nullptr);
         m_player->setAudioBufferOutput(m_bufferOut);
+        m_sinceDrain.invalidate();
         m_drain->start();
     } else {
         m_player->setAudioBufferOutput(nullptr);
         m_player->setAudioOutput(m_audio);
         m_drain->stop();
+        m_sinceDrain.invalidate();
         closeSink();
     }
     m_eqRouted = m_eqOn;
@@ -182,16 +200,36 @@ void Engine::closeSink() {
 }
 
 void Engine::flushAudio() {
+    QElapsedTimer took;
+    took.start();
     m_primed = false;
+    m_sincePrime.restart();
     m_sinceBuffer.invalidate();
     m_eqQueue.clear();
     m_eq.reset();
     m_resamplePos = 0;
     m_last[0] = m_last[1] = 0;
-    if (m_sink) {
-        m_sink->stop();
-        m_sinkIo = m_sink->start();
-    }
+    // A new sink (and with it a new AudioTrack) for each song, as the player's
+    // own output does.  One sink stopped and started again for each song kept a
+    // stutter, which a restart of the song cleared, after a few quick changes
+    // of song; it is opened with the first buffer (onAudioBuffer).
+    closeSink();
+    if (took.elapsed() > 20)
+        qWarning("closing the sound output took %lld ms", took.elapsed());
+    dropStale();
+}
+
+void Engine::dropStale() {
+    ++m_staleMarks;
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            if (--m_staleMarks > 0) return;
+            if (m_dropped > 0)
+                qInfo("dropped %d buffers of the song before", m_dropped);
+            m_dropped = 0;
+        },
+        Qt::QueuedConnection);
 }
 
 // Stereo 16 bit at the source's rate when the device takes it, else at the
@@ -211,11 +249,13 @@ void Engine::openSink(int sourceRate) {
         if (s != QAudio::IdleState || !m_sink) return;
         qint64 pos = m_player->position(), left = m_player->duration() - pos;
         if (m_player->playbackState() != QMediaPlayer::PlayingState ||
-            pos <= 0 || left < 500 || !m_sinceBuffer.isValid()) return;
+            pos <= 0 || left < 500 || !m_sinceBuffer.isValid() || !m_primed)
+            return;  // a new sink is idle until the first sound is given
         qWarning("sound output ran dry at %lld ms: %d bytes queued, last "
                  "buffer %lld ms ago", pos, int(m_eqQueue.size()),
                  m_sinceBuffer.isValid() ? m_sinceBuffer.elapsed() : -1);
         m_primed = false;  // build up the cushion again
+        m_sincePrime.restart();
     });
     m_sink->setBufferSize(int(format.bytesForDuration(150000)));
     m_sinkIo = m_sink->start();
@@ -232,13 +272,18 @@ void Engine::openSink(int sourceRate) {
 }
 
 void Engine::drainSink() {
+    if (m_sinceDrain.isValid() && m_sinceDrain.elapsed() > 150)
+        qWarning("engine thread did not feed the sound for %lld ms",
+                 m_sinceDrain.elapsed());
+    m_sinceDrain.start();
     if (!m_sinkIo || m_eqQueue.isEmpty()) return;
     if (!m_primed) {
         if (m_eqQueue.size() < m_sink->format().bytesForDuration(300000))
             return;
         m_primed = true;
-        qInfo("sound output started %lld ms after the song, %d bytes queued",
-              m_sinceSource.elapsed(), int(m_eqQueue.size()));
+        qInfo("sound output started %lld ms after the song, %lld ms after it "
+              "was restarted, %d bytes queued", m_sinceSource.elapsed(),
+              m_sincePrime.elapsed(), int(m_eqQueue.size()));
     }
     qint64 room = m_sink->bytesFree();
     if (room <= 0) return;
@@ -262,18 +307,31 @@ static float sampleAt(const QAudioBuffer &b, int frame, int channel) {
 }
 
 void Engine::onAudioBuffer(const QAudioBuffer &buffer) {
-    if (!m_eqOn || !m_eqRouted || !buffer.isValid()) return;
+    if (!m_eqRouted || !buffer.isValid()) return;
+    if (m_staleMarks > 0) {
+        ++m_dropped;
+        return;
+    }
     if (m_firstBuffer) {
         m_firstBuffer = false;
         qInfo("\"%s\": first sound after %lld ms", qPrintable(m_title),
               m_sinceSource.elapsed());
     }
-    else if (m_sinceBuffer.isValid() && m_sinceBuffer.elapsed() > 100)
+    else if (m_sinceBuffer.isValid() && m_sinceBuffer.elapsed() > 200)
         qWarning("sound buffer came %lld ms after the one before",
                  m_sinceBuffer.elapsed());
     m_sinceBuffer.restart();
     int rate = buffer.format().sampleRate(), frames = buffer.frameCount();
-    if (!m_sink || rate != m_sourceRate || m_devicesChanged) openSink(rate);
+    if (!m_sink || rate != m_sourceRate || m_devicesChanged) {
+        qInfo("opening the sound output: %s",
+              !m_sink                ? "none was open"
+              : rate != m_sourceRate ? "the song's rate changed"
+                                     : "the output devices changed");
+        QElapsedTimer took;
+        took.start();
+        openSink(rate);
+        qInfo("opening the sound output took %lld ms", took.elapsed());
+    }
     if (!m_sinkIo) return;
     // stereo float, with the volume (ramped across the buffer, not stepped)
     QVector<float> pcm(frames * 2);
@@ -352,6 +410,9 @@ void Engine::buildOrder(int startRow, bool keepFirst) {
 void Engine::playQueue(const QVector<QueueItem> &items, int row, bool shuffle,
                        qint64 listId) {
     if (row < 0 || row >= items.size()) return;
+    qInfo("song chosen from a list: row %d of %d, shuffle %s, at %lld ms of "
+          "the song playing", row + 1, int(items.size()), shuffle ? "on" : "off",
+          m_player->position());
     endSchedule();
     m_listId = listId;
     m_queue = items;
@@ -385,7 +446,17 @@ void Engine::playCurrent() {
     if (m_pos < 0 || m_pos >= m_order.size()) return;
     m_queueEnded = false;
     const QueueItem &t = m_order[m_pos];
+    QElapsedTimer total;  // where the time goes when a song is started
+    total.start();
+    QString laps;
+    qint64 lapped = 0;
+    auto lap = [&](const char *what) {
+        qint64 now = total.elapsed();
+        laps += QString(", %1 %2").arg(what).arg(now - lapped);
+        lapped = now;
+    };
     finishTrack();
+    lap("finishing the last");
     if (m_currentId >= 0 && m_currentId != t.id && m_skippable && !m_counted &&
         !m_skipped.contains(m_currentId))
         m_skipped.append(m_currentId);  // left before it counted: a skip, which
@@ -401,12 +472,20 @@ void Engine::playCurrent() {
     m_counted = false;
     m_title = t.title;
     m_artist = t.artist;
+    m_album = t.album;
+    m_phase = 0;  // a new song starts with its title
     m_measured = t.measured;
     m_loudness = t.loudness;
     applyVolume();
+    qInfo("volume: leveling %s, target %.1f LUFS, song %s%.1f LUFS, output "
+          "gain %.3f", m_leveling ? "on" : "off", m_target,
+          m_measured ? "" : "unmeasured ", m_measured ? m_loudness : 0.0,
+          m_gain);
     emit current(t.id, t.title, t.artist, t.album);
     m_rating = -1;
+    lap("telling the screen");
     readRating(t.id);
+    lap("rating");
     QString full = m_root + "/" + cleanPath(t.path);
     if (!QFileInfo::exists(full)) {
         m_player->stop();
@@ -420,15 +499,25 @@ void Engine::playCurrent() {
     emit message({});
     m_stalledMs = 0;
     m_kicks = 0;
+    lap("file check");
     chooseEqPreset(t.id);
     applyEqGains();
+    lap("genres");
     routeAudio();
+    lap("routing");
     if (!m_naturalEnd) flushAudio();  // else the last of the song still plays
+    lap("flush");
     m_firstBuffer = m_eqOn;
     m_sinceBuffer.invalidate();
     m_sinceSource.start();
     m_player->setSource(QUrl::fromLocalFile(full));
+    lap("set source");
     m_player->play();
+    if (!m_naturalEnd) dropStale();  // what the old song still delivers
+    lap("play");
+    qInfo("song change took %lld ms (%lld ms choosing the song before it)%s",
+          total.elapsed(), m_choiceMs, qPrintable(laps));
+    m_choiceMs = 0;
 }
 
 void Engine::resume() {
@@ -449,6 +538,7 @@ void Engine::toggle() {
         return;
     }
     if (m_player->playbackState() == QMediaPlayer::PlayingState) {
+        qInfo("paused at %lld ms", m_player->position());
         m_player->pause();
         return;
     }
@@ -458,18 +548,30 @@ void Engine::toggle() {
         playCurrent();
         return;
     }
+    qInfo("resumed at %lld ms", m_player->position());
     m_sinceBuffer.invalidate();  // a pause is not a late buffer
     m_primed = false;
+    m_sincePrime.restart();
+    QElapsedTimer took;
+    took.start();
     m_player->play();
+    qInfo("play after a pause took %lld ms", took.elapsed());
 }
 
 void Engine::next() {
     if (m_order.isEmpty()) return;
+    qInfo("next song asked for (%s) at %lld ms",
+          m_naturalEnd ? "the song ended" : "button or list",
+          m_player->position());
     if (m_section >= 0 && scheduleNext()) return;
     if (m_pos + 1 < m_order.size())
         ++m_pos;
     else if (m_follow) {
-        if (!followNext()) {
+        QElapsedTimer choice;
+        choice.start();
+        const bool found = followNext();
+        m_choiceMs = choice.elapsed();
+        if (!found) {
             // nothing on the list is left to play: the played songs have left
             // it and others are coming in, so look again shortly
             qInfo("nothing left to play on the playlist: reading it again");
@@ -524,7 +626,6 @@ bool Engine::followNext() {
 bool Engine::listIsDynamic() const {
     if (m_listId < 0 || m_dbPath.isEmpty()) return false;
     bool dynamic = false;
-    QMutexLocker lock(&dbLock());
     const QString name = "kind-" + QUuid::createUuid().toString(QUuid::Id128);
     {
         QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
@@ -571,6 +672,8 @@ void Engine::continueFromList(bool user) {
 void Engine::previous() {
     if (m_order.isEmpty()) return;
     if (m_player->position() > 3000 || m_pos == 0) {
+        qInfo("previous: back to the start of the song, from %lld ms",
+              m_player->position());
         m_player->setPosition(0);
         flushAudio();
         return;
@@ -580,8 +683,13 @@ void Engine::previous() {
 }
 
 void Engine::seek(qint64 ms) {
+    qInfo("seek from %lld ms to %lld ms", m_player->position(), ms);
+    QElapsedTimer took;
+    took.start();
     m_player->setPosition(ms);
+    qint64 player = took.elapsed();
     flushAudio();
+    qInfo("seek took %lld ms (player %lld ms)", took.elapsed(), player);
     pushState();
 }
 
@@ -596,7 +704,11 @@ void Engine::handleCommand(int what, qint64 argument) {
             if (!on) toggle();
             break;
         case Pause:
-            if (on) m_player->pause();
+            if (on) {
+                qInfo("paused from outside the app at %lld ms",
+                      m_player->position());
+                m_player->pause();
+            }
             break;
         case Next: next(); break;
         case Previous: previous(); break;
@@ -627,15 +739,18 @@ void Engine::pushState(bool force) {
     if (m_currentId < 0 ||
         (m_player->playbackState() == QMediaPlayer::StoppedState && !force))
         return;
+    const bool playing =
+        m_player->playbackState() == QMediaPlayer::PlayingState;
     QJniObject context = QNativeInterface::QAndroidApplication::context();
     QJniObject::callStaticMethod<void>(
         "org/musicplayer/player/PlaybackService", "update",
-        "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;ZJJI)V",
+        "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;"
+        "Ljava/lang/String;ZJJII)V",
         context.object(), QJniObject::fromString(m_title).object<jstring>(),
         QJniObject::fromString(m_artist).object<jstring>(),
-        jboolean(m_player->playbackState() == QMediaPlayer::PlayingState),
+        QJniObject::fromString(m_album).object<jstring>(), jboolean(playing),
         jlong(m_player->position()), jlong(m_player->duration()),
-        jint(m_rating));
+        jint(m_rating), jint(playing ? m_phase : 0));
 #endif
 }
 
@@ -783,7 +898,11 @@ void Engine::clockTick() {
     if (!playing) return;
     // the time left in the notification and on the car's display is text
     m_sincePush += dt;
-    if (m_sincePush >= 10000) pushState();
+    if (m_sincePush >= 10000) {
+        m_phase ^= 1;  // a head unit with one line shows the title, then the
+                       // stars and the time left
+        pushState();
+    }
     kickStalledStart(dt);
     if (m_player->position() == 0) return;  // not heard yet
     m_heard += dt;
@@ -842,15 +961,28 @@ QString Engine::sectionText() const {
 // so the sync keeps the newer write).  The track stays on its dynamic playlists
 // until it ends or is left (finishTrack).  Own short-lived connection, rollback
 // journal: no write-ahead log on the card.
+//
+// The writes wait for the card (a full sync each), so they run in the writer
+// thread, one after the other; the engine thread also feeds the sound, and a
+// write of 100 ms or more there was heard as a stutter when a song started.
 void Engine::countPlay() {
     if (m_dbPath.isEmpty()) return;
+    const qint64 id = m_currentId;
+    m_unmarkedId = id;  // marking it played is queued after this write
+    m_writes.start([this, path = m_dbPath, id] { writePlay(path, id); });
+}
+
+void Engine::writePlay(const QString &path, qint64 id) {
+    QElapsedTimer waiting;
+    waiting.start();
     QMutexLocker lock(
         &dbLock());  // the sync server may be replacing the database
+    noteWait(waiting, "play count");
     const QString name = "play-" + QUuid::createUuid().toString(QUuid::Id128);
     QString problem;
     {
         QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
-        db.setDatabaseName(m_dbPath);
+        db.setDatabaseName(path);
         db.setConnectOptions("QSQLITE_BUSY_TIMEOUT=3000");
         if (!db.open()) {
             problem = db.lastError().text();
@@ -877,7 +1009,7 @@ void Engine::countPlay() {
                           "last_played = ?, stats_modified = ? WHERE id = ?");
                 q.addBindValue(last);
                 q.addBindValue(stamp);
-                q.addBindValue(m_currentId);
+                q.addBindValue(id);
                 ok = ok && q.exec();
                 if (ok) ok = db.commit();
                 if (!ok) {
@@ -892,12 +1024,18 @@ void Engine::countPlay() {
         }
     }
     QSqlDatabase::removeDatabase(name);
+    qInfo("database write (play count) took %lld ms", waiting.elapsed());
     if (!problem.isEmpty()) {
         emit message(problem);
+        QMetaObject::invokeMethod(
+            this,
+            [this, id] {
+                if (m_unmarkedId == id) m_unmarkedId = -1;
+            },
+            Qt::QueuedConnection);
         return;
     }
     ++dbGeneration();
-    m_unmarkedId = m_currentId;
     emit playCounted();
 }
 
@@ -909,7 +1047,6 @@ void Engine::readRating(qint64 id) {
     if (m_dbPath.isEmpty()) return;
     int rating = -1;
     {
-        QMutexLocker lock(&dbLock());
         const QString name =
             "rating-" + QUuid::createUuid().toString(QUuid::Id128);
         {
@@ -934,12 +1071,26 @@ void Engine::readRating(qint64 id) {
 
 void Engine::setRating(qint64 id, int rating) {
     if (m_dbPath.isEmpty() || id < 0) return;
+    if (id == m_currentId) {
+        m_rating = rating;
+        pushState();  // the notification shows the stars
+    }
+    emit ratingKnown(id, rating);
+    m_writes.start([this, path = m_dbPath, id, rating] {
+        writeRating(path, id, rating);
+    });
+}
+
+void Engine::writeRating(const QString &path, qint64 id, int rating) {
+    QElapsedTimer waiting;
+    waiting.start();
     QMutexLocker lock(&dbLock());
+    noteWait(waiting, "rating written");
     const QString name = "rate-" + QUuid::createUuid().toString(QUuid::Id128);
     QString problem;
     {
         QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
-        db.setDatabaseName(m_dbPath);
+        db.setDatabaseName(path);
         db.setConnectOptions("QSQLITE_BUSY_TIMEOUT=3000");
         if (!db.open()) {
             problem = db.lastError().text();
@@ -968,16 +1119,14 @@ void Engine::setRating(qint64 id, int rating) {
         }
     }
     QSqlDatabase::removeDatabase(name);
+    qInfo("database write (rating) took %lld ms", waiting.elapsed());
     if (!problem.isEmpty()) {
         emit message(problem);
+        QMetaObject::invokeMethod(this, [this, id] { readRating(id); },
+                                  Qt::QueuedConnection);  // show what is stored
         return;
     }
     ++dbGeneration();
-    if (id == m_currentId) {
-        m_rating = rating;
-        pushState();
-    }  // the notification shows the stars
-    emit ratingKnown(id, rating);
 }
 
 // The counted track has ended or been left: mark it as played in every dynamic
@@ -1003,12 +1152,20 @@ void Engine::commitSkips() {
 }
 
 void Engine::markPlayed(const QVector<qint64> &ids) {
+    if (m_dbPath.isEmpty()) return;
+    m_writes.start([this, path = m_dbPath, ids] { writePlayed(path, ids); });
+}
+
+void Engine::writePlayed(const QString &path, const QVector<qint64> &ids) {
+    QElapsedTimer waiting;
+    waiting.start();
     QMutexLocker lock(&dbLock());
+    noteWait(waiting, "played");
     const QString name = "mark-" + QUuid::createUuid().toString(QUuid::Id128);
     QString problem;
     {
         QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
-        db.setDatabaseName(m_dbPath);
+        db.setDatabaseName(path);
         db.setConnectOptions("QSQLITE_BUSY_TIMEOUT=3000");
         if (!db.open()) {
             problem = db.lastError().text();
@@ -1040,13 +1197,16 @@ void Engine::markPlayed(const QVector<qint64> &ids) {
         }
     }
     QSqlDatabase::removeDatabase(name);
+    qInfo("database write (played) took %lld ms", waiting.elapsed());
     if (!problem.isEmpty()) {
         emit message(problem);
         return;
     }
     ++dbGeneration();
     emit playCounted();
-    refillLists();
+    lock.unlock();  // the top-up takes the lock itself
+    QMetaObject::invokeMethod(this, [this] { refillLists(); },
+                              Qt::QueuedConnection);
 }
 
 void Engine::setDatabase(const QString &path) {

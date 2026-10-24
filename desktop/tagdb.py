@@ -944,6 +944,37 @@ class TagDb:
                 pid, json.loads(rules_json), set(json.loads(played_json))
             )
 
+    def delete_from_disk(self, paths: list[str]) -> tuple[list[str], list[str]]:
+        # Delete the files (paths relative to the music folder) from the disk,
+        # then the folders that became empty, up to but not including the music
+        # folder.  Returns (files that could not be deleted, folders removed).
+        root = os.path.realpath(self.root())
+        failed: list[str] = []
+        folders: set[str] = set()
+        for path in paths:
+            full = os.path.join(root, path)
+            if not os.path.realpath(full).startswith(root + os.sep):
+                failed.append(path)  # outside the music folder: never touched
+                continue
+            try:
+                os.remove(full)
+            except FileNotFoundError:
+                pass  # already gone
+            except OSError:
+                failed.append(path)
+                continue
+            folders.add(os.path.dirname(full))
+        removed: list[str] = []
+        for folder in sorted(folders, key=len, reverse=True):
+            while os.path.realpath(folder).startswith(root + os.sep):
+                try:
+                    os.rmdir(folder)  # fails unless the folder is empty
+                except OSError:
+                    break
+                removed.append(os.path.relpath(folder, root))
+                folder = os.path.dirname(folder)
+        return failed, removed
+
     def reread_files(
         self, entries: dict[str, tuple[dict, dict[str, list[str]]]]
     ) -> None:

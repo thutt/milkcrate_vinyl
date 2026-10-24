@@ -42,8 +42,10 @@ A line above the seek bar always says what the equalizer is doing:
 "Equalizer off", "Equalizer: Rock" or "Equalizer: Classical (auto)".
 It is text only; the EQ button changes the settings.
 
-  Equalizer on      Switches it on or off.  The change takes effect
-                    with the next song, not during the one playing.
+  Equalizer on      Switches it on or off.  Switched on, it takes
+                    effect with the next song.  Switched off, the
+                    song playing goes on with flat settings, and the
+                    next song plays without the equalizer.
   Preset            A list of settings, below.  The box reads "Custom"
                     when the sliders match none.
   Sliders           Five bands, -12 to +12 dB each: 60 Hz, 230 Hz,
@@ -57,28 +59,39 @@ scale are rounded off.
 Presets (dB for the five bands, low to high):
 
   Flat                  0   0   0   0   0
-  Rock                 +4  +2  -2  +3  +4
-  Metal                +4  -2  -3  +4  +3
+  Normal               +3   0   0   0  +3
+  Rock                 +5  +3  -1  +3  +5
+  Metal                +4  +1  +9  +3   0
   Punk                 +3   0  -2  +4  +3
-  Pop                  -1  +2  +3  +1  -1
-  Hip-hop / R&B        +6  +4   0  +1  +2
-  Electronic / Dance   +5  +2  -1  +2  +4
-  Jazz                 +3  +2  -2  +2  +3
-  Classical            +3  +1  -1  +2  +3
-  Acoustic             +2  +2  +1  +3  +2
+  Pop                  -1  +2  +5  +1  -2
+  Hip-hop / R&B        +5  +3   0  +1  +3
+  Electronic / Dance   +6   0  +2  +4  +1
+  Jazz                 +4  +2  -2  +2  +5
+  Classical            +5  +3  -2  +4  +4
+  Folk / Acoustic      +3   0   0  +2  -1
   Country              +2  +1  +1  +3  +2
   Vocal                -2  -1  +3  +4  +1
   Bass boost           +7  +5  +1   0   0
   Treble boost          0   0   0  +4  +7
   Loudness             +6  +3   0  +2  +5
 
-The values are starting points, not a standard.
+Normal, Rock, Metal, Pop, Hip-hop / R&B, Electronic / Dance, Jazz,
+Classical and Folk / Acoustic are the presets of Android's own
+equalizer (called Normal, Rock, Heavy Metal, Pop, Hip Hop, Dance, Jazz,
+Classical and Folk there), which has the same five bands.  The others
+are our own guesses.  The values are starting points, not a standard.
+
+In the equalizer dialog the preset's name is shown between a left and a
+right arrow.  The arrows select the previous or the next preset in the
+order above, round the list, and the sound changes at once.  After the
+sliders were moved by hand the name is "Custom"; the left arrow then
+selects the last preset and the right arrow the first.
 
 Manual and automatic settings
 -----------------------------
 
 The equalizer works in one of two ways, chosen by the switch
-"Automatic: a preset for each song's genre":
+"Auto: a preset for each song's genre":
 
                  Manual (switch off)     Automatic (switch on)
   Who chooses    You: a preset or the    The app, for each song, from
@@ -86,8 +99,10 @@ The equalizer works in one of two ways, chosen by the switch
   Applies to     Every song.             One song at a time; the next
                  It stays until you      song may get another preset.
                  change it.
-  Preset box     Editable.               Shows the song's preset;
-  and sliders                            locked.
+  Preset name    Left and right arrows   Shows the song's preset;
+  and sliders    step through the        arrows and sliders locked.
+                 presets; the sliders
+                 are free.
   Saved          Yes, between runs.      The switch is saved; the
                                          songs' presets are not.
   Song with no   Not applicable.         The manual settings are used.
@@ -96,7 +111,7 @@ The equalizer works in one of two ways, chosen by the switch
 The manual settings are one set for the whole app.  Automatic mode
 never changes them.  It sets them aside while a song has a preset and
 uses them again for a song that has none.  Switching Automatic off
-returns to them, with the preset box and the sliders unlocked.
+returns to them, with the arrows and the sliders unlocked.
 
 In automatic mode the preset is chosen when a song starts and is kept
 until it ends.  Changing the switch during a song takes effect at once
@@ -111,13 +126,13 @@ the song.  Both only apply while the equalizer is on.
 Automatic equalizer
 -------------------
 
-"Automatic: a preset for each song's genre" chooses the preset from the
+"Auto: a preset for each song's genre" chooses the preset from the
 song's genre tags each time a song starts.  It works only while the
 equalizer is on.  A line under the switch names the preset in use for
-the song playing, and the preset box and the sliders show that preset.
+the song playing, and the preset name and the sliders show that preset.
 They are locked while it applies, because changing them would change
 settings that are not used.  A song with no matching genre uses the
-manual settings, and the box and sliders unlock.
+manual settings, and the arrows and sliders unlock.
 
 A genre selects a preset when its name contains one of these words
 (capitals do not matter).  The presets are tried in this order, and the
@@ -132,7 +147,7 @@ first that fits any of the song's genres is used:
   Jazz                 jazz, big band, swing, bebop, blues
   Classical            classical, orchestral, symphon, opera
   Country              country, bluegrass
-  Acoustic             acoustic, folk, celtic, hawaiian, singer
+  Folk / Acoustic      acoustic, folk, celtic, hawaiian, singer
   Pop                  pop, new wave, 80s, disco
   Vocal                audiobook, spoken, podcast, speech
 
@@ -181,6 +196,42 @@ goes to standard error.  Nothing is changed.  A library of 13,000 files
 takes about a minute.  In one library, 1,289 of 13,383 songs (all MP3)
 matched, and every one of 20 matches tried did stall, and none of 40
 others.
+
+The log file
+------------
+
+The app writes what it logs to milkcrate-log.txt in the library folder,
+next to tags.db, with a time on each line.  Unlike the system log
+(adb logcat) it survives switching the phone off.  It starts over at 4
+MB; the old file is kept as milkcrate-log.txt.1.  Lines to look for
+when the sound stutters:
+
+    engine thread waited N ms for the database (...)
+    engine thread did not feed the sound for N ms
+    sound output ran dry at N ms
+    sound buffer came N ms after the one before
+    song change took N ms (...)
+    opening the sound output took N ms
+    database write (play count | played | rating) took N ms
+
+Each song change logs how long every step took, so a stall can be
+placed.  Buffers of the song before, still on their way when the song
+is changed, are dropped, and the log says how many.  Pause, resume,
+seek and a song chosen from a list are logged with the position.
+
+Copy the file to the computer with adb pull or a file manager.
+
+How the sound is played
+-----------------------
+
+With the equalizer on, the app decodes the song and plays it through a
+sound output of its own.  Every change of song, and every seek, closes
+that output and opens a new one.  Keeping one output and stopping and
+starting it again for each song caused a steady stutter over Bluetooth
+after a few quick changes of song; it lasted until the song was
+restarted.  The play counts, ratings and "played" marks are written to
+the database in a thread of their own, so a slow card does not
+interrupt the sound.
 
 Limits
 ------

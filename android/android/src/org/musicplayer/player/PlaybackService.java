@@ -102,13 +102,17 @@ public class PlaybackService extends Service {
     }
 
     /** Called from C++ whenever the track or the play state changes. */
+    // phase: what the title line shows, for head units that have one line for
+    // it: 0 the song's title, 1 the stars and the time left (swapped every 10 s)
     public static void update(Context context, String title, String artist,
-                              boolean playing, long position, long duration,
-                              int rating) {
+                              String album, boolean playing, long position,
+                              long duration, int rating, int phase) {
         Intent intent = new Intent(context, PlaybackService.class)
                             .setAction(ACTION_UPDATE)
                             .putExtra("title", title)
                             .putExtra("artist", artist)
+                            .putExtra("album", album)
+                            .putExtra("phase", phase)
                             .putExtra("playing", playing)
                             .putExtra("position", position)
                             .putExtra("duration", duration)
@@ -198,6 +202,8 @@ public class PlaybackService extends Service {
         } else if (ACTION_UPDATE.equals(action)) {
             show(intent.getStringExtra("title"),
                  intent.getStringExtra("artist"),
+                 intent.getStringExtra("album"),
+                 intent.getIntExtra("phase", 0),
                  intent.getBooleanExtra("playing", false),
                  intent.getLongExtra("position", 0),
                  intent.getLongExtra("duration", 0),
@@ -230,29 +236,33 @@ public class PlaybackService extends Service {
         return rating + " \u2605";
     }
 
-    // "  .  -3:42" (a middle dot): the time left, as text (the progress bar
-    // moves by itself between updates; this changes only when the app sends
-    // one)
+    // "-3:42": the time left, as text (the progress bar moves by itself between
+    // updates; this changes only when the app sends one)
     private static String left(long position, long duration) {
         if (duration <= 0 || position < 0 || position > duration) return "";
         long seconds = (duration - position + 500) / 1000;
         long hours = seconds / 3600, minutes = seconds / 60 % 60;
-        return "  \u00b7  -" +
+        return "-" +
             (hours > 0 ? String.format("%d:%02d:%02d", hours, minutes,
                                        seconds % 60)
                        : String.format("%d:%02d", minutes, seconds % 60));
     }
 
-    private void show(String title, String artist, boolean playing,
-                      long position, long duration, int rating) {
-        String line = artist + "  \u00b7  " + stars(rating) +
-                      left(position, duration);
+    private void show(String title, String artist, String album, int phase,
+                      boolean playing, long position, long duration,
+                      int rating) {
+        String time = left(position, duration);
+        String info =
+            stars(rating) + (time.isEmpty() ? "" : "  \u00b7  " + time);
+        String line = artist + "  \u00b7  " + info;  // the notification
+        // A head unit may show one line for the title: it alternates between
+        // the song's title and the stars and time left.  Artist and album stay.
         session.setMetadata(
             new MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST,
-                           line)  // the lock screen shows only title and
-                                  // artist
+                .putString(MediaMetadata.METADATA_KEY_TITLE,
+                           phase == 1 ? info : title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, album)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
                 .build());
         session.setPlaybackState(

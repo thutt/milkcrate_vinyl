@@ -35,31 +35,11 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
+from file_analysis import bpm_one as one
 from schema import BPM_ANALYSIS_SCHEMA
 from tagdb import TagDb, normalize
 
 LEVEL = {"low": 0, "medium": 1, "high": 2}
-
-
-def one(args):
-    root, rel = args
-    import detect_bpm
-
-    try:
-        return rel, detect_bpm.analyse(os.path.join(root, rel)), ""
-    except Exception as e:  # undecodable file: stays 0
-        return (
-            rel,
-            {
-                "bpm": 0,
-                "reliability": "low",
-                "agree": 0,
-                "windows": 0,
-                "prominence": 0.0,
-                "tempos": [],
-            },
-            str(e)[:120],
-        )
 
 
 def first(db: TagDb, path: str, name: str) -> str:

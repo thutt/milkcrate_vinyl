@@ -328,8 +328,9 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
     return chooseFrom(tracks, rules, exclude, limit);
 }
 
+// The counts only read, and take no lock: holding it for the whole rule
+// evaluation (over a second on the phone) kept the engine from starting songs.
 int countMatches(const QString &dbPath, qint64 playlistId) {
-    QMutexLocker lock(&dbLock());
     Connection c(dbPath);
     if (!c.ok) return -1;
     QSqlQuery q(c.db());
@@ -346,7 +347,6 @@ int countMatches(const QString &dbPath, qint64 playlistId) {
 }
 
 QHash<qint64, int> countAllMatches(const QString &dbPath) {
-    QMutexLocker lock(&dbLock());
     QHash<qint64, int> counts;
     Connection c(dbPath);
     if (!c.ok) return counts;

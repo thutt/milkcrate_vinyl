@@ -7,17 +7,22 @@
 //
 #include "eqpresets.h"
 
+// Normal, Rock, Metal (Android's Heavy Metal), Pop, Hip-hop, Electronic /
+// Dance, Jazz, Classical and Folk / Acoustic are the presets of Android's own
+// equalizer (the AOSP LVM effect), which has the same five bands; Punk,
+// Country, Vocal, Bass boost, Treble boost and Loudness are ours.
 const EqPreset eqPresets[] = {
     {"Flat", {0, 0, 0, 0, 0}},
-    {"Rock", {4, 2, -2, 3, 4}},
-    {"Metal", {4, -2, -3, 4, 3}},
+    {"Normal", {3, 0, 0, 0, 3}},
+    {"Rock", {5, 3, -1, 3, 5}},
+    {"Metal", {4, 1, 9, 3, 0}},
     {"Punk", {3, 0, -2, 4, 3}},
-    {"Pop", {-1, 2, 3, 1, -1}},
-    {"Hip-hop / R&B", {6, 4, 0, 1, 2}},
-    {"Electronic / Dance", {5, 2, -1, 2, 4}},
-    {"Jazz", {3, 2, -2, 2, 3}},
-    {"Classical", {3, 1, -1, 2, 3}},
-    {"Acoustic", {2, 2, 1, 3, 2}},
+    {"Pop", {-1, 2, 5, 1, -2}},
+    {"Hip-hop / R&B", {5, 3, 0, 1, 3}},
+    {"Electronic / Dance", {6, 0, 2, 4, 1}},
+    {"Jazz", {4, 2, -2, 2, 5}},
+    {"Classical", {5, 3, -2, 4, 4}},
+    {"Folk / Acoustic", {3, 0, 0, 2, -1}},
     {"Country", {2, 1, 1, 3, 2}},
     {"Vocal", {-2, -1, 3, 4, 1}},
     {"Bass boost", {7, 5, 1, 0, 0}},
@@ -46,7 +51,8 @@ const QList<Rule> &rules() {
         {"Jazz", {"jazz", "big band", "swing", "bebop", "blues"}},
         {"Classical", {"classical", "orchestral", "symphon", "opera"}},
         {"Country", {"country", "bluegrass"}},
-        {"Acoustic", {"acoustic", "folk", "celtic", "hawaiian", "singer"}},
+        {"Folk / Acoustic",
+         {"acoustic", "folk", "celtic", "hawaiian", "singer"}},
         {"Pop", {"pop", "new wave", "80s", "disco"}},
         {"Vocal", {"audiobook", "spoken", "podcast", "speech"}},
     };

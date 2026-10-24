@@ -22,6 +22,7 @@
 #include <QElapsedTimer>
 #include <QMutex>
 #include <QObject>
+#include <QThreadPool>
 #include <QTimer>
 #include <QVector>
 #include <atomic>
@@ -99,6 +100,10 @@ private:
     // plays, so the switch is made when the next song is loaded (routeAudio).
     void routeAudio();
     void flushAudio();  // drop what is waiting to be played (after a seek)
+    // Buffers of the old song are still on their way to this thread when the
+    // queue is flushed; they would play ahead of the new sound.  Those that
+    // arrived before the next pass of the event loop are dropped.
+    void dropStale();
     void onAudioBuffer(const QAudioBuffer &buffer);
     void openSink(int sourceRate);
     void drainSink();
@@ -125,6 +130,13 @@ private:
     void
     countPlay();  // a play counts after 20 s of listening; written to tags.db
 
+    // Writes to tags.db, in the order they were asked for.  They run in a
+    // thread of their own and wait for the card; the engine thread must not.
+    void writePlay(const QString &path, qint64 id);
+    void writeRating(const QString &path, qint64 id, int rating);
+    void writePlayed(const QString &path, const QVector<qint64> &ids);
+    QThreadPool m_writes;
+
     QMediaPlayer *m_player = nullptr;
     QAudioOutput *m_audio = nullptr;
     QString m_root, m_dbPath;
@@ -138,7 +150,8 @@ private:
         m_order;     // queue in list order; order in play order
     int m_pos = -1;  // index into m_order
     qint64 m_currentId = -1;
-    QString m_title, m_artist;
+    QString m_title, m_artist, m_album;
+    int m_phase = 0;  // 0: the service shows the title, 1: stars and time left
     int m_rating = -1;  // of the current track: -1 unrated, 0..5 stars (shown
                         // in the notification)
     bool m_shuffle = false, m_leveling = true, m_measured = false;
@@ -168,13 +181,17 @@ private:
     qint64 m_stalledMs = 0;  // ms the song has been playing at position 0
     qint64 m_sincePush = 0;  // ms since the service was told what plays
     int m_kicks = 0;         // restarts of a stalled song
+    QElapsedTimer m_sinceDrain;  // since the sink was last fed
     QElapsedTimer m_sinceBuffer;  // since the last decoded buffer (equalizer)
     QElapsedTimer m_sinceSource;  // since the song was handed to the player
+    QElapsedTimer m_sincePrime;   // since the sink was last emptied (restart)
+    qint64 m_choiceMs = 0;        // time spent choosing the song being started
     bool m_firstBuffer = false;   // the next buffer is the song's first
     // The sink is fed once about 300 ms of sound is queued.  The decoder
     // delivers sound only as fast as it plays, so a sink started on the first
     // buffer runs dry before each next one.
     bool m_primed = false;
+    int m_staleMarks = 0, m_dropped = 0;  // see dropStale
     // the queue ran out: the player waits, paused, and Play starts it again
     bool m_queueEnded = false;
     qint64 m_listId = -1;  // the playlist the queue was read from

@@ -15,6 +15,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+LOST = 6  # failures in a row that mean the phone is gone
 BAD = re.compile(r'[*?:"<>|\\\x00-\x1f]')
 
 
@@ -69,10 +70,18 @@ def manifest(
 
 
 def copy_files(
-    todo: list[tuple[str, str, int]], push_one, jobs: int, log=print
+    todo: list[tuple[str, str, int]],
+    push_one,
+    jobs: int,
+    log=print,
+    cancelled=lambda: False,
 ) -> int:
     # Copy [(source, relative path, size)] with push_one(source, rel) (raises on
-    # failure; tried three times).
+    # failure; tried three times).  Stops starting files when cancelled() is
+    # true, and after LOST failures in a row (the phone went away); a stopped
+    # copy returns 1.
+    skipped = 0
+    lost = [0, False]  # failures in a row, gave up
     done = [0, 0]  # files, bytes
     failures: list[tuple[str, str]] = []
     lock = threading.Lock()
@@ -90,12 +99,23 @@ def copy_files(
                 folder[0], folder[1] = where, number
         err = ""
         for attempt in (1, 2, 3):
+            if cancelled() or lost[1]:
+                return item, "not copied: stopped"
             try:
                 push_one(source, rel)
+                lost[0] = 0
                 return item, None
             except Exception as e:  # adb or network: try again a little later
                 err = str(e)
-                time.sleep(2 * attempt)
+                for _ in range(2 * attempt * 10):  # sleep, but stay stoppable
+                    if cancelled() or lost[1]:
+                        break
+                    time.sleep(0.1)
+        with lock:
+            lost[0] += 1
+            if lost[0] >= LOST and not lost[1]:
+                lost[1] = True
+                log("The phone stopped answering; giving up.")
         return item, err
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
@@ -103,7 +123,9 @@ def copy_files(
         for n, future in enumerate(as_completed(futures), 1):
             (source, rel, size), err = future.result()
             with lock:
-                if err:
+                if err and err.startswith("not copied"):
+                    skipped += 1
+                elif err:
                     failures.append((rel, err))
                     log(f"FAILED {rel}: {err[:200]}")
                 else:
@@ -119,7 +141,9 @@ def copy_files(
                         f" {len(failures)} failed"
                     )
     log(
-        f"finished: {done[0]} copied, {len(failures)} failed,"
+        f"finished: {done[0]} copied, {len(failures)} failed, {skipped} left,"
         f" {(time.time() - start) / 60:.1f} min"
     )
-    return 1 if failures else 0
+    if cancelled():
+        log("Stopped.")
+    return 1 if failures or cancelled() else 0

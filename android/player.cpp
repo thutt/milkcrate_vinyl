@@ -11,7 +11,10 @@
 
 #include <QDebug>
 #include <QDir>
+#include <QDateTime>
+#include <QFile>
 #include <QFileInfo>
+#include <QMutex>
 #include <QGuiApplication>
 #include <QRandomGenerator>
 #include <QStandardPaths>
@@ -67,6 +70,8 @@ Player::Player(QObject *parent)
             });
     connect(m_engine, &Engine::ratingKnown, this,
             [this](qint64 id, int rating) {
+                m_model.setRating(id, rating);
+                m_entries.setRating(id, rating);
                 if (id == m_currentId && rating != m_rating) {
                     m_rating = rating;
                     emit ratingChanged();
@@ -322,6 +327,50 @@ void Player::requestAudioPermission() {
 #endif
 }
 
+// Everything the app logs is also kept in a file next to tags.db, because the
+// system log is small and is lost when the phone is switched off.  The file is
+// started over when it passes 4 MB (the old one is kept as .1).
+static QFile *g_logFile = nullptr;
+static QtMessageHandler g_oldHandler = nullptr;
+
+static void logToFile(QtMsgType type, const QMessageLogContext &context,
+                      const QString &text) {
+    static QMutex mutex;
+    if (g_oldHandler) g_oldHandler(type, context, text);
+    QMutexLocker lock(&mutex);
+    if (!g_logFile || !g_logFile->isOpen()) return;
+    const char *level = type == QtWarningMsg    ? "W"
+                        : type == QtCriticalMsg ? "E"
+                        : type == QtFatalMsg    ? "F"
+                                                : "I";
+    g_logFile->write(QString("%1 %2 %3\n")
+                         .arg(QDateTime::currentDateTime().toString(
+                             "MM-dd HH:mm:ss.zzz"))
+                         .arg(level)
+                         .arg(text)
+                         .toUtf8());
+    g_logFile->flush();
+    if (g_logFile->size() > 4000000) {
+        const QString path = g_logFile->fileName();
+        g_logFile->close();
+        QFile::remove(path + ".1");
+        QFile::rename(path, path + ".1");
+        g_logFile->open(QIODevice::WriteOnly | QIODevice::Append);
+    }
+}
+
+static void startLogFile(const QString &path) {
+    if (g_logFile) return;
+    g_logFile = new QFile(path);
+    if (!g_logFile->open(QIODevice::WriteOnly | QIODevice::Append)) {
+        delete g_logFile;
+        g_logFile = nullptr;
+        return;
+    }
+    g_oldHandler = qInstallMessageHandler(logToFile);
+    qInfo("---- app started");
+}
+
 void Player::start() {
     if (qEnvironmentVariableIsSet("MILKCRATEVINYL_MUTE"))
         onEngine([e = m_engine] { e->setMuted(true); });  // for tests
@@ -340,6 +389,7 @@ void Player::start() {
         e->setRoot(r);
         e->setDatabase(d);
     });
+    startLogFile(QFileInfo(m_dbPath).absolutePath() + "/milkcrate-log.txt");
     emit pathsChanged();
     checkFilesAccess();
     reload();

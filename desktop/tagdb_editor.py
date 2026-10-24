@@ -35,6 +35,7 @@ from PyQt6.QtGui import (
     QBrush,
     QColor,
     QKeySequence,
+    QShortcut,
     QStandardItem,
     QStandardItemModel,
 )
@@ -42,6 +43,8 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -83,7 +86,10 @@ from rating_delegate import (
     STAR_SLOT,
     RatingDelegate,
 )
+from bulk_values import change_value
+from analysis_actions import detect_bpm, measure_loudness
 from path_display import PathDelegate, ROOT_ROLE, full_path
+from phone_review import review_phone_changes
 from phone_sync_dialog import open_sync_dialog
 
 PATH_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -222,6 +228,13 @@ class MainWindow(QMainWindow):
         filter_row.addWidget(self.lists_only)
         page_layout.addLayout(filter_row)
         page_layout.addWidget(self.overview)
+        self.overview.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.overview.customContextMenuRequested.connect(self._overview_menu)
+        delete_key = QShortcut(QKeySequence.StandardKey.Delete, self.overview)
+        delete_key.setContext(Qt.ShortcutContext.WidgetShortcut)
+        delete_key.activated.connect(self.delete_overview_tags)
 
         self.missing_only = QCheckBox("Only files missing standard tags")
         self.missing_only.setToolTip(
@@ -351,6 +364,7 @@ class MainWindow(QMainWindow):
             ("S&can for New Files...", None, self.scan_for_files),
             ("&Save", QKeySequence.StandardKey.Save, self.save),
             ("S&ync with Phone...", None, self.sync_phone),
+            ("&Review Phone Changes...", None, self.review_phone),
             ("&Quit", QKeySequence.StandardKey.Quit, self.close),
         ):
             action = QAction(text, self)
@@ -362,6 +376,13 @@ class MainWindow(QMainWindow):
                 self.save_action = action
         menu = self.menuBar().addMenu("&Rating")
         self._add_rating_actions(menu)
+        menu = self.menuBar().addMenu("&Analyse")
+        self._add_analysis_actions(menu)
+        menu = self.menuBar().addMenu("&Tags")
+        menu.addAction(
+            "&Scrub Tags from Selected Files...",
+            lambda: self.scrub_tags(self._selected_files()),
+        )
 
     def _add_rating_actions(self, menu) -> None:
         # Entries that rate the selected files (a folder stands for the files in
@@ -376,6 +397,32 @@ class MainWindow(QMainWindow):
                 + "\u2606" * (5 - n),
                 lambda n=n: self.set_rating(n),
             ).setShortcut(f"Ctrl+{n}")
+
+    def _add_analysis_actions(self, menu) -> None:
+        menu.addAction("Detect BPM", lambda: self.analyse(detect_bpm))
+        menu.addAction(
+            "Measure loudness", lambda: self.analyse(measure_loudness)
+        )
+
+    def analyse(self, action) -> None:
+        # Detect the BPM of, or measure the loudness of, the selected files (a
+        # folder stands for the files in it).  Stored in the database only.
+        paths = self._selected_files()
+        if not paths:
+            self.statusBar().showMessage("Select files or folders first", 4000)
+            return
+        if not self._confirm_discard():
+            return
+        changed = action(self, self.db, paths)
+        if not changed:
+            return
+        self.tree.setUpdatesEnabled(False)
+        for p in changed:
+            self._fill_cells(p)
+        self.tree.setUpdatesEnabled(True)
+        self.editor.set_files(
+            [self.db.tags[p] for p in self.current], self._root, self.current
+        )
 
     def set_rating(self, rating) -> None:
         # Rate the selected files (0 to 5, None = not rated).  Stored at once,
@@ -434,12 +481,97 @@ class MainWindow(QMainWindow):
         if files:
             menu.addSeparator()
             self._add_rating_actions(menu.addMenu("Rate"))
+            self._add_analysis_actions(menu.addMenu("Analyse"))
+            menu.addAction(
+                "Scrub tags...", lambda: self.scrub_tags(files)
+            )
             menu.addAction(
                 f"Remove {len(files)} file{'s' if len(files) != 1 else ''} from"
                 " library...",
                 lambda: self.remove_from_library(files),
             )
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def scrub_tags(self, files: list[str]) -> None:
+        # Delete whole tags (every value) from the selected files in the
+        # database; the tag names are listed with the number of files that
+        # have them, and the standard ones start unchecked.
+        if not files:
+            self.statusBar().showMessage("Select files or folders first", 4000)
+            return
+        if not self._confirm_discard():
+            return
+        counts: dict[str, int] = {}
+        for p in files:
+            for key in self.db.tags[p]:
+                counts[key] = counts.get(key, 0) + 1
+        if not counts:
+            QMessageBox.information(
+                self, "Scrub tags", "The selected files have no tags."
+            )
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Scrub tags")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(
+            QLabel(
+                f"Tags to delete from {len(files)} selected file"
+                f"{'s' if len(files) != 1 else ''} (all their values):"
+            )
+        )
+        keys = sorted(counts, key=tagio.sort_key)
+        boxes: dict[str, QCheckBox] = {}
+        for key in keys:
+            box = QCheckBox(f"{key}   ({counts[key]})")
+            boxes[key] = box
+            layout.addWidget(box)
+        row = QHBoxLayout()
+        for text, wanted in (
+            ("All but standard", lambda k: k not in STANDARD_TAGS),
+            ("None", lambda k: False),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(
+                lambda _=False, w=wanted: [
+                    b.setChecked(w(k)) for k, b in boxes.items()
+                ]
+            )
+            row.addWidget(button)
+        row.addStretch()
+        layout.addLayout(row)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        chosen = [k for k, b in boxes.items() if b.isChecked()]
+        if not chosen:
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Scrub tags",
+                f"Delete {', '.join(chosen)} from {len(files)} file(s)?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        if self._write(files, lambda _path: {k: None for k in chosen}):
+            self.editor.set_files(
+                [self.db.tags[p] for p in self.current],
+                self._root,
+                self.current,
+            )
+            self._refresh_overview()
+            self.statusBar().showMessage(
+                f"{len(chosen)} tag{'s' if len(chosen) != 1 else ''} deleted"
+                f" from {len(files)} file{'s' if len(files) != 1 else ''}",
+                4000,
+            )
 
     def remove_from_library(self, files: list[str]) -> None:
         # Delete the selected files from the database (never from the disk),
@@ -452,18 +584,25 @@ class MainWindow(QMainWindow):
             if self.db.stats.get(p, (None, 0, None))[1]
             or self.db.stats.get(p, (None,))[0] is not None
         )
-        answer = QMessageBox.question(
-            self,
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
             "Remove from library",
             f"Remove {len(files)} file{'s' if len(files) != 1 else ''} from the"
             " database?\n\nTheir tags, play counts, ratings and playlist"
             f" entries are deleted ({plays} of them have plays or a rating)."
-            " The files on disk are not touched; a later scan will list them"
-            " as new again if they are still in the music folder.",
+            " Unless the box below is checked, the files on disk are not"
+            " touched, and a later scan will list them as new again if they"
+            " are still in the music folder.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
+            self,
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        erase = QCheckBox(
+            "Also delete the files from the disk, and the folders that become"
+            " empty (cannot be undone)"
+        )
+        box.setCheckBox(erase)
+        if box.exec() != QMessageBox.StandardButton.Yes:
             return
         backup = self.db.backup("remove-files")
         journal = self.db.journal(
@@ -474,20 +613,38 @@ class MainWindow(QMainWindow):
                     "path": p,
                     "tags": self.db.tags[p],
                     "stats": list(self.db.stats.get(p, ())),
+                    "disk": erase.isChecked(),
                 }
                 for p in files
             ],
         )
         self.db.remove_files(files)
         left = [p for p in files if p in self.db.tags]
+        gone = [p for p in files if p not in left]
+        failed, folders = (
+            self.db.delete_from_disk(gone) if erase.isChecked() else ([], [])
+        )
         self.playlist_panel.set_db(self.db)
         self.load()
+        text = (
+            f"Removed {len(files) - len(left)}"
+            f" files{f' ({len(left)} FAILED)' if left else ''}."
+        )
+        if erase.isChecked():
+            text += (
+                f"\n\nDeleted {len(gone) - len(failed)} files and"
+                f" {len(folders)} empty folders from the disk."
+            )
+            if failed:
+                text += (
+                    f"\n{len(failed)} could not be deleted:\n"
+                    + "\n".join(failed[:10])
+                    + ("\n..." if len(failed) > 10 else "")
+                )
         QMessageBox.information(
             self,
             "Remove from library",
-            f"Removed {len(files) - len(left)}"
-            f" files{f' ({len(left)} FAILED)' if left else ''}.\n\nBackup:"
-            f" {backup}\nJournal: {journal}",
+            f"{text}\n\nBackup: {backup}\nJournal: {journal}",
         )
 
     def scan_for_files(self) -> None:
@@ -567,12 +724,33 @@ class MainWindow(QMainWindow):
     def sync_phone(self) -> None:
         if not self._confirm_discard():
             return
+        self.phone_report = None
         open_sync_dialog(self, self.db, self._phone_synced)
+        self.review_phone()
 
     def _phone_synced(self, report) -> None:
         # The phone's plays and ratings are in the database: show them.
+        self.phone_report = report
         self.load()
         self.playlist_panel.refresh()
+
+    def review_phone(self) -> None:
+        # Rate or correct the songs the last sync took from the phone.
+        if not getattr(self, "phone_report", None):
+            self.statusBar().showMessage("No phone sync to review", 4000)
+            return
+        if not self.phone_report.changes:
+            self.statusBar().showMessage(
+                "The last sync took nothing from the phone", 4000
+            )
+            return
+        review_phone_changes(
+            self, self.db, self.phone_report, self._rated_elsewhere
+        )
+
+    def _rated_elsewhere(self, paths: list[str]) -> None:
+        for p in paths:
+            self._fill_cells(p)
 
     def open_db(self) -> None:
         if not self._confirm_discard():
@@ -1342,6 +1520,60 @@ class MainWindow(QMainWindow):
         )
         self._refresh_overview()
 
+    def _overview_tag_keys(self) -> list[str]:
+        # the tags (top-level rows) selected in the Tags tab
+        return [
+            i.text(0)
+            for i in self.overview.selectedItems()
+            if i.parent() is None
+        ]
+
+    def _overview_menu(self, pos) -> None:
+        item = self.overview.itemAt(pos)
+        if item is not None and not item.isSelected():
+            self.overview.setCurrentItem(item)
+        keys = self._overview_tag_keys()
+        if not keys:
+            return
+        menu = QMenu(self)
+        names = ", ".join(keys) if len(keys) < 4 else f"{len(keys)} tags"
+        menu.addAction(
+            f"Delete {names} from all files...", self.delete_overview_tags
+        )
+        menu.exec(self.overview.viewport().mapToGlobal(pos))
+
+    def delete_overview_tags(self) -> None:
+        # Delete the selected tags, with every value, from every file that
+        # has them (whatever the filters hide).
+        keys = self._overview_tag_keys()
+        if not keys or not self._confirm_discard():
+            return
+        affected = [
+            p for p in self.db.tags if any(k in self.db.tags[p] for k in keys)
+        ]
+        if not affected:
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Delete tags",
+                f"Delete {', '.join(keys)} from {len(affected)} file(s)?"
+                "  The music files are not touched.",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        if self._write(affected, lambda _path: {k: None for k in keys}):
+            self.editor.set_files(
+                [self.db.tags[p] for p in self.current],
+                self._root,
+                self.current,
+            )
+            self._refresh_overview()
+            self.statusBar().showMessage(
+                f"{', '.join(keys)} deleted from {len(affected)} file(s)", 4000
+            )
+
     def _overview_selected(self) -> None:
         # Select, in the file tree, the files that have the chosen tag/values.
         wanted: set[str] = set()
@@ -1361,113 +1593,23 @@ class MainWindow(QMainWindow):
         # Add one value to a tag in every selected file, or remove one, leaving
         # each file's other values and tags alone.
         # It is applied at once (after asking), like a rename in the Tags tab.
-        paths = list(self.current)
-        if not paths or not self._confirm_discard():
+        if not self.current or not self._confirm_discard():
             return
-        paths = list(self.current)
-        if mode == "add":
-            choices = self._suggest(key)
-            if choices:
-                text, ok = QInputDialog.getItem(
-                    self,
-                    f"Add a value to {key}",
-                    f"Value to add to {key} in {len(paths)} file(s):",
-                    choices,
-                    0,
-                    True,
-                )
-                text = text if ok else ""
-            else:
-                text, ok = QInputDialog.getText(
-                    self,
-                    f"Add a value to {key}",
-                    f"Value to add to {key} in {len(paths)} file(s):",
-                )
-            values = (
-                (
-                    [v.strip() for v in text.split(";") if v.strip()]
-                    if key in SPLIT_TAGS or choices
-                    else [text.strip()]
-                )
-                if ok
-                else []
-            )
-            values = [v for v in dict.fromkeys(values) if v]
-            if not values:
-                return
-            affected = [
-                p
-                for p in paths
-                if any(v not in self.db.tags[p].get(key, []) for v in values)
-            ]
-            question = (
-                f"Add {' + '.join(repr(v) for v in values)} to {key} in"
-                f" {len(affected)} of {len(paths)} file(s)?"
-            )
-
-            def changes(path: str) -> dict:
-                current = list(self.db.tags[path].get(key, []))
-                return {key: current + [v for v in values if v not in current]}
-
-        else:
-            counts: dict[str, int] = {}
-            for p in paths:
-                for v in set(self.db.tags[p].get(key, [])):
-                    counts[v] = counts.get(v, 0) + 1
-            if not counts:
-                QMessageBox.information(
-                    self,
-                    "Remove a value",
-                    f"None of the selected files has {key}.",
-                )
-                return
-            labels = [
-                f"{v}   ({n} file{'s' if n != 1 else ''})"
-                for v, n in sorted(counts.items(), key=lambda kv: kv[0].lower())
-            ]
-            label, ok = QInputDialog.getItem(
-                self,
-                f"Remove a value from {key}",
-                f"Value to remove from {key}:",
-                labels,
-                0,
-                False,
-            )
-            if not ok:
-                return
-            value = sorted(counts, key=str.lower)[labels.index(label)]
-            affected = [
-                p for p in paths if value in self.db.tags[p].get(key, [])
-            ]
-            question = (
-                f"Remove {value!r} from {key} in {len(affected)} of"
-                f" {len(paths)} file(s)?"
-            )
-
-            def changes(path: str) -> dict:
-                return {
-                    key: [
-                        v for v in self.db.tags[path].get(key, []) if v != value
-                    ]
-                }
-
-        if not affected:
-            QMessageBox.information(
-                self,
-                "Nothing to change",
-                "Every selected file is already as asked.",
-            )
-            return
-        if (
-            QMessageBox.question(self, "Change tags", question)
-            != QMessageBox.StandardButton.Yes
+        if change_value(
+            self,
+            self.db,
+            list(self.current),
+            mode,
+            key,
+            self._suggest(key),
+            self._write,
         ):
-            return
-        self._write(affected, changes)
-        self.editor.set_files(
-            [self.db.tags[p] for p in self.current], self._root, self.current
-        )
-        self._refresh_overview()
+            self.editor.set_files(
+                [self.db.tags[p] for p in self.current],
+                self._root,
+                self.current,
+            )
+            self._refresh_overview()
 
     # -- saving ------------------------------------------------------------
 

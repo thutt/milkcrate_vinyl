@@ -32,10 +32,10 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
 int topUpDynamicPlaylists(const QString &dbPath, QString *problem = nullptr);
 
 // How many library tracks (duplicates excluded) the rules of a dynamic playlist
-// select; -1 if it has none or the database cannot be read.  Takes dbLock()
+// select; -1 if it has none or the database cannot be read.  Takes no lock
 // itself.
 int countMatches(const QString &dbPath, qint64 playlistId);
 
 // The same count for every dynamic playlist at once (the library is read once):
-// playlist id -> matches.  Takes dbLock().
+// playlist id -> matches.  Takes no lock.
 QHash<qint64, int> countAllMatches(const QString &dbPath);

@@ -235,6 +235,7 @@ ApplicationWindow {
         property bool marked: false
         property string heading
         property string sub
+        property int rating: -1   // stars of a song that is not playing
         width: ListView.view.width
         height: playingNow ? 104 : 64
         Behavior on height { NumberAnimation { duration: 150 } }
@@ -291,6 +292,16 @@ ApplicationWindow {
                     font.pixelSize: 13; opacity: row.playingNow ? 0.85 : 0.65
                 }
                 Stars { visible: row.playingNow }
+            }
+            // the rating of the other songs: five stars, none when not rated
+            Label {
+                visible: !row.playingNow && row.rating >= 0
+                Layout.alignment: Qt.AlignVCenter
+                Layout.rightMargin: 4
+                text: "\u2605".repeat(row.rating) +
+                      "\u2606".repeat(5 - row.rating)
+                font.pixelSize: 15
+                color: Material.color(Material.Amber)
             }
         }
     }
@@ -429,6 +440,7 @@ ApplicationWindow {
                 playingNow: trackId === player.currentId
                 heading: title
                 sub: artist + (album ? "  ·  " + album : "")
+                rating: model.rating
                 onClicked: { player.playRow(index); searchField.focus = false }
             }
         }
@@ -538,6 +550,7 @@ ApplicationWindow {
                 marked: index === 0 && player.currentId < 0
                 heading: title
                 sub: artist + (album ? "  ·  " + album : "")
+                rating: model.rating
                 onClicked: player.playEntry(index)
             }
         }
@@ -729,7 +742,8 @@ ApplicationWindow {
                 text: "Switching it on or off takes effect with the next song."
             }
             Switch {
-                text: "Automatic: a preset for each song's genre"
+                Layout.fillWidth: true
+                text: "Auto: a preset for each song's genre"
                 checked: player.eqAuto
                 onToggled: player.eqAuto = checked
             }
@@ -746,33 +760,84 @@ ApplicationWindow {
             }
             // while a song's automatic preset applies, the controls show it
             // and are locked: they would change settings that are not used
-            ComboBox {
+            // the preset's name between two arrows; each arrow moves to the
+            // next preset (round the list) and it applies at once
+            RowLayout {
+                id: presetRow
                 Layout.fillWidth: true
-                enabled: !(player.eqAuto && player.eqAutoName !== "")
-                model: player.eqPresets
-                displayText: player.eqShownPreset
-                currentIndex: player.eqPresets.indexOf(player.eqShownPreset)
-                onActivated: player.setEqPreset(currentText)
+                readonly property bool locked:
+                    player.eqAuto && player.eqAutoName !== ""
+                function step(direction) {
+                    var count = player.eqPresets.length;
+                    var at = player.eqPresets.indexOf(player.eqShownPreset);
+                    // "Custom" is not in the list: go to the first or last
+                    at = at < 0 ? (direction > 0 ? 0 : count - 1)
+                                : (at + direction + count) % count;
+                    player.setEqPreset(player.eqPresets[at]);
+                }
+                ToolButton {
+                    text: "\u2190"
+                    font.pixelSize: 28
+                    enabled: !presetRow.locked
+                    onClicked: presetRow.step(-1)
+                }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    font.pixelSize: 18
+                    opacity: presetRow.locked ? 0.6 : 1
+                    text: player.eqShownPreset
+                }
+                ToolButton {
+                    text: "\u2192"
+                    font.pixelSize: 28
+                    enabled: !presetRow.locked
+                    onClicked: presetRow.step(1)
+                }
             }
             Repeater {
                 model: 5
                 RowLayout {
                     Layout.fillWidth: true
+                    TextMetrics {
+                        id: bandWidth
+                        font: bandText.font
+                        text: "3.6 kHz"  // the widest, so the bars line up
+                    }
                     Label {
-                        Layout.preferredWidth: 64
+                        id: bandText
+                        Layout.minimumWidth: bandWidth.advanceWidth + 2
                         text: player.eqBands[index]
                     }
                     Slider {
+                        id: bandSlider
                         Layout.fillWidth: true
                         from: -12
                         to: 12
                         stepSize: 1
                         enabled: !(player.eqAuto && player.eqAutoName !== "")
-                        value: player.eqShownGains[index]
                         onMoved: player.setEqBand(index, value)
+                        // moving the slider by hand replaces a plain binding
+                        // for good; this one stays, so the bar follows the
+                        // song's automatic preset
+                        Binding {
+                            target: bandSlider
+                            property: "value"
+                            value: player.eqShownGains[index]
+                            restoreMode: Binding.RestoreNone
+                        }
+                    }
+                    TextMetrics {
+                        id: dbWidth
+                        font: dbText.font
+                        text: "-12 dB"
                     }
                     Label {
-                        Layout.preferredWidth: 56
+                        id: dbText
+                        // wide enough for "-12 dB", never cut off; the slider
+                        // gives way
+                        Layout.minimumWidth: dbWidth.advanceWidth + 2
                         horizontalAlignment: Text.AlignRight
                         text: (player.eqShownGains[index] > 0 ? "+" : "") +
                               player.eqShownGains[index].toFixed(0) + " dB"
@@ -876,9 +941,13 @@ ApplicationWindow {
         id: syncDialog
         title: "Sync with the desktop"
         modal: true
+        closePolicy: player.syncRunning
+            ? Popup.NoAutoClose
+            : Popup.CloseOnEscape | Popup.CloseOnPressOutside
         anchors.centerIn: Overlay.overlay
         width: window.width - 32
         standardButtons: Dialog.Close
+        onRejected: if (player.syncRunning) player.stopSync()
         ColumnLayout {
             anchors.fill: parent
             spacing: 8

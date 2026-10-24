@@ -54,7 +54,7 @@ QVector<QueueItem> entriesOf(QSqlDatabase db, qint64 playlistId) {
               "(SELECT value FROM tag WHERE file_id = m.id AND name = 'ARTIST' "
               "AND pos = 0), "
               "(SELECT value FROM tag WHERE file_id = m.id AND name = 'ALBUM' "
-              "AND pos = 0), i.pos "
+              "AND pos = 0), i.pos, m.rating "
               "FROM playlist_item i JOIN media_file m ON m.id = i.file_id "
               "WHERE i.playlist_id = ?" +
               QString(hasRemovedMark(db) ? " AND i.removed_at IS NULL" : "") +
@@ -71,6 +71,7 @@ QVector<QueueItem> entriesOf(QSqlDatabase db, qint64 playlistId) {
         t.artist = q.value(4).toString();
         t.album = q.value(5).toString();
         t.pos = q.value(6).toLongLong();
+        t.rating = q.value(7).isNull() ? -1 : q.value(7).toInt();
         if (t.title.isEmpty()) {
             int slash = t.path.lastIndexOf('/'), dot = t.path.lastIndexOf('.');
             t.title = t.path.mid(slash + 1, dot > slash ? dot - slash - 1 : -1);
@@ -281,6 +282,7 @@ QVariant EntryModel::data(const QModelIndex &index, int role) const {
         case TitleRole: return t.title;
         case ArtistRole: return t.artist;
         case AlbumRole: return t.album;
+        case RatingRole: return t.rating;
     }
     return {};
 }
@@ -289,7 +291,16 @@ QHash<int, QByteArray> EntryModel::roleNames() const {
     return {{IdRole, "trackId"},
             {TitleRole, "title"},
             {ArtistRole, "artist"},
-            {AlbumRole, "album"}};
+            {AlbumRole, "album"},
+            {RatingRole, "rating"}};
+}
+
+void EntryModel::setRating(qint64 id, int rating) {
+    for (int row = 0; row < m_items.size(); ++row) {
+        if (m_items[row].id != id || m_items[row].rating == rating) continue;
+        m_items[row].rating = rating;
+        emit dataChanged(index(row), index(row), {RatingRole});
+    }
 }
 
 void EntryModel::setItems(const QVector<QueueItem> &items) {

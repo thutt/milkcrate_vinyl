@@ -28,12 +28,12 @@ import sqlite3
 import sys
 
 from PyQt6.QtCore import (
+    QAbstractProxyModel,
     QAbstractTableModel,
     QItemSelection,
     QItemSelectionModel,
     QModelIndex,
     QSettings,
-    QSortFilterProxyModel,
     Qt,
     QTimer,
     QUrl,
@@ -77,10 +77,13 @@ from PyQt6.QtWidgets import (
 )
 
 from rating_delegate import RATING_ROLE, STAR_MARGIN, STAR_SLOT, RatingDelegate
+from analysis_actions import detect_bpm, measure_loudness
 from tagdb import MAX_CHOICES, SPLIT_TAGS, TagDb, stat_text
 import containers
 from playlists import PlaylistPanel, populate_add_menu
 from tag_editor import TagEditor
+from bulk_values import change_value
+from phone_review import review_phone_changes
 from phone_sync_dialog import open_sync_dialog
 
 COLUMNS = [
@@ -310,22 +313,108 @@ class LibraryModel(QAbstractTableModel):
                 self.dataChanged.emit(self.index(row, 0), self.index(row, 0))
 
 
-class LibraryProxy(QSortFilterProxyModel):
+class LibraryProxy(QAbstractProxyModel):
+    # The tracks that match the search, in the order of the sorted column.
+    #
+    # Qt's own sorting proxy asks the model for every value each time it
+    # compares two rows, calling into Python hundreds of thousands of times;
+    # sorting and filtering all the tracks took most of a second.  Here the
+    # values are read once and sorted in Python.  A change in the tags does not
+    # move a row until invalidate() (the player says when it can matter).
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.needles: list[tuple[str | None, re.Pattern]] = []
         self.show_duplicates = False
-        self.setSortRole(SORT_ROLE)
+        self._rows: list[int] = []  # source rows that are shown, in order
+        self._place: dict[int, int] = {}  # source row -> row here
+        self._column = -1
+        self._order = Qt.SortOrder.AscendingOrder
+
+    def setSourceModel(self, model) -> None:
+        self.beginResetModel()
+        old = self.sourceModel()
+        if old is not None:
+            old.dataChanged.disconnect(self._source_changed)
+            old.modelReset.disconnect(self._source_reset)
+        super().setSourceModel(model)
+        model.dataChanged.connect(self._source_changed)
+        model.modelReset.connect(self._source_reset)
+        self._arrange()
+        self.endResetModel()
+
+    def _source_reset(self) -> None:
+        self.beginResetModel()
+        self._arrange()
+        self.endResetModel()
+
+    def _source_changed(self, top, bottom, roles=()) -> None:
+        for row in range(top.row(), bottom.row() + 1):
+            place = self._place.get(row)
+            if place is not None:
+                self.dataChanged.emit(
+                    self.index(place, top.column()),
+                    self.index(place, bottom.column()),
+                    roles,
+                )
+
+    def _arrange(self) -> None:
+        model: LibraryModel = self.sourceModel()
+        if model is None:
+            return
+        rows = [
+            r
+            for r in range(model.rowCount())
+            if self.filterAcceptsRow(r)
+        ]
+        if self._column >= 0:
+            values = {
+                r: model.data(model.index(r, self._column), SORT_ROLE)
+                for r in rows
+            }
+            # ties keep the tracks in the order of the library (albums in
+            # track order)
+            rows.sort(
+                key=lambda r: (values[r], r),
+                reverse=self._order == Qt.SortOrder.DescendingOrder,
+            )
+        self._rows = rows
+        self._place = {r: i for i, r in enumerate(rows)}
+
+    def invalidate(self) -> None:
+        # Filter and sort again, keeping the selection.
+        self.layoutAboutToBeChanged.emit()
+        old = self.persistentIndexList()
+        kept = [(self._rows[i.row()], i.column()) for i in old]
+        self._arrange()
+        self.changePersistentIndexList(
+            old,
+            [
+                self.index(self._place[r], c) if r in self._place
+                else QModelIndex()
+                for r, c in kept
+            ],
+        )
+        self.layoutChanged.emit()
+
+    invalidateFilter = invalidate
+
+    def sort(self, column: int, order=Qt.SortOrder.AscendingOrder) -> None:
+        self._column, self._order = column, order
+        self.invalidate()
+
+    def sortColumn(self) -> int:
+        return self._column
 
     def set_show_duplicates(self, show: bool) -> None:
         self.show_duplicates = show
-        self.invalidateFilter()
+        self.invalidate()
 
     def set_filter(self, text: str) -> None:
         self.needles = parse_search(text)
-        self.invalidateFilter()
+        self.invalidate()
 
-    def filterAcceptsRow(self, row, parent) -> bool:
+    def filterAcceptsRow(self, row) -> bool:
         model: LibraryModel = self.sourceModel()
         if not self.show_duplicates and model.paths[row] in model.db.dup_of:
             return False
@@ -341,13 +430,40 @@ class LibraryProxy(QSortFilterProxyModel):
             for field, rx in self.needles
         )
 
-    def lessThan(self, left, right) -> bool:
-        a, b = left.data(SORT_ROLE), right.data(SORT_ROLE)
-        if (
-            a == b
-        ):  # keep albums in track order when sorting by artist / album / etc.
-            a, b = left.row(), right.row()
-        return a < b
+    # -- the model interface ----------------------------------------------
+
+    def index(self, row, column, parent=QModelIndex()):
+        if 0 <= row < len(self._rows) and not parent.isValid():
+            return self.createIndex(row, column)
+        return QModelIndex()
+
+    def parent(self, child=QModelIndex()):
+        return QModelIndex()
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        model = self.sourceModel()
+        return 0 if parent.isValid() or model is None else model.columnCount()
+
+    _FLAGS = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def flags(self, index):
+        # The default asks the source for each cell, through mapToSource, in
+        # Python; the view asks for many thousands when much is selected.
+        return self._FLAGS if index.isValid() else Qt.ItemFlag.NoItemFlags
+
+    def mapToSource(self, index):
+        if not index.isValid():
+            return QModelIndex()
+        return self.sourceModel().index(self._rows[index.row()], index.column())
+
+    def mapFromSource(self, index):
+        place = self._place.get(index.row()) if index.isValid() else None
+        return QModelIndex() if place is None else self.index(
+            place, index.column()
+        )
 
 
 def fmt_time(ms: int) -> str:
@@ -702,6 +818,7 @@ class MainWindow(QMainWindow):
         self.editor = TagEditor()
         self.editor.changed.connect(self._editor_changed)
         self.editor.suggest = self._suggest
+        self.editor.bulk_requested.connect(self._bulk_value)
         self.editor.split_keys = SPLIT_TAGS
         self.save_button = QPushButton("Save")
         self.save_button.clicked.connect(self.save)
@@ -779,6 +896,38 @@ class MainWindow(QMainWindow):
             if 0 < len(values) <= MAX_CHOICES
             else []
         )
+
+    def _bulk_value(self, mode: str, key: str) -> None:
+        # Add a value to a tag (a genre, say) in every selected track, or
+        # remove one, leaving their other values alone; stored at once.
+        if not self.current or not self._confirm_discard():
+            return
+        paths = list(self.current)
+        if change_value(
+            self, self.db, paths, mode, key, self._suggest(key), self._store
+        ):
+            self.editor.set_files(
+                [self.db.tags[p] for p in paths], self.root, paths
+            )
+
+    def _store(self, paths: list[str], changes_for) -> None:
+        try:
+            self.db.write(paths, changes_for)
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Cannot save", str(e))
+            return
+        self.model.refresh(paths)
+        self._resort({k for p in paths for k in changes_for(p)})
+        self._update_status()
+
+    def _resort(self, keys: set) -> None:
+        # Sorting and filtering all the tracks again takes most of a second,
+        # so only when the change can move a row: the table is sorted by one
+        # of the changed tags, or a search is active.
+        column = self.proxy.sortColumn()
+        sorted_by = COLUMNS[column][1] if 0 <= column < len(COLUMNS) else None
+        if self.proxy.needles or sorted_by in keys:
+            self.proxy.invalidate()
 
     def _update_status(self) -> None:
         shown, total = self.proxy.rowCount(), self.model.rowCount()
@@ -1151,7 +1300,29 @@ class MainWindow(QMainWindow):
         paths = self._selected_files()
         menu = QMenu(self)
         populate_add_menu(menu, self.db, paths, self, self._added_to_playlist)
+        if paths:
+            menu.addSeparator()
+            menu.addAction(
+                "Detect BPM", lambda: self.analyse(detect_bpm, paths)
+            )
+            menu.addAction(
+                "Measure loudness",
+                lambda: self.analyse(measure_loudness, paths),
+            )
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def analyse(self, action, paths: list[str]) -> None:
+        # Detect the BPM of, or measure the loudness of, these files; stored in
+        # the database only.
+        if not self._confirm_discard():
+            return
+        changed = action(self, self.db, paths)
+        if not changed:
+            return
+        self.model.refresh(changed)
+        self.editor.set_files(
+            [self.db.tags[p] for p in self.current], self.root, self.current
+        )
 
     def _added_to_playlist(self, playlist_id: int) -> None:
         self.playlist_panel.refresh(select=playlist_id)
@@ -1399,7 +1570,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Cannot save", str(e))
             return False
         self.model.refresh(paths)
-        self.proxy.invalidate()  # re-sort / re-filter on the new values
+        self._resort(set(changes))
         self.editor.set_files(
             [self.db.tags[p] for p in paths], self.root, paths
         )
@@ -1443,6 +1614,7 @@ class MainWindow(QMainWindow):
             menu, "&Save Tags", QKeySequence.StandardKey.Save, self.save
         )
         add(menu, "S&ync with Phone...", None, self.sync_phone)
+        add(menu, "&Review Phone Changes...", None, self.review_phone)
         add(menu, "&Quit", QKeySequence.StandardKey.Quit, self.close)
         menu = self.menuBar().addMenu("&View")
         self.duplicates_action = add(
@@ -1597,11 +1769,27 @@ class MainWindow(QMainWindow):
     def sync_phone(self) -> None:
         if not self._confirm_discard():
             return
+        self.phone_report = None
         open_sync_dialog(self, self.db, self._phone_synced)
+        self.review_phone()
+
+    def review_phone(self) -> None:
+        # Rate or correct the songs the last sync took from the phone.
+        report = getattr(self, "phone_report", None)
+        if not report or not report.changes:
+            self.statusBar().showMessage(
+                "The last sync took nothing from the phone"
+                if report
+                else "No phone sync to review",
+                4000,
+            )
+            return
+        review_phone_changes(self, self.db, report, self.model.refresh)
 
     def _phone_synced(self, report) -> None:
         # The phone's plays and ratings are in the database: show them, follow
         # the dynamic playlists that were refilled.
+        self.phone_report = report
         self.model.refresh(report.paths)
         self.playlist_panel.refresh()
         for pid in report.playlists_changed:

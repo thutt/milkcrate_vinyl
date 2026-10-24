@@ -48,6 +48,7 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const {
         case TitleRole: return t->title;
         case ArtistRole: return t->artist;
         case AlbumRole: return t->album;
+        case RatingRole: return t->rating;
     }
     return {};
 }
@@ -56,7 +57,8 @@ QHash<int, QByteArray> TrackModel::roleNames() const {
     return {{IdRole, "trackId"},
             {TitleRole, "title"},
             {ArtistRole, "artist"},
-            {AlbumRole, "album"}};
+            {AlbumRole, "album"},
+            {RatingRole, "rating"}};
 }
 
 bool TrackModel::load(const QString &dbPath, QString *error) {
@@ -76,7 +78,8 @@ bool TrackModel::load(const QString &dbPath, QString *error) {
         QSqlQuery q(db);
         q.setForwardOnly(true);
         bool ok = q.exec(
-            "SELECT m.id, m.path, m.loudness, t.name, t.value FROM media_file "
+            "SELECT m.id, m.path, m.loudness, t.name, t.value, m.rating FROM "
+            "media_file "
             "m "
             "LEFT JOIN tag t ON t.file_id = m.id AND ((t.pos = 0 AND t.name IN "
             "('TITLE', 'ARTIST', 'ALBUM', 'TRACKNUMBER')) OR t.name = 'GENRE') "
@@ -95,6 +98,7 @@ bool TrackModel::load(const QString &dbPath, QString *error) {
                     t.path = q.value(1).toString();
                     t.measured = !q.value(2).isNull();
                     t.loudness = t.measured ? q.value(2).toDouble() : 0;
+                    t.rating = q.value(5).isNull() ? -1 : q.value(5).toInt();
                     index.insert(id, all.size());
                     all.append(t);
                     it = index.find(id);
@@ -165,9 +169,18 @@ QVector<QueueItem> TrackModel::viewItems() const {
     for (int pos : m_view) {
         const Track &t = m_all[pos];
         items.append(
-            {t.id, t.path, t.title, t.artist, t.album, t.loudness, t.measured});
+            {t.id, t.path, t.title, t.artist, t.album, t.loudness, t.measured,
+             -1, t.rating});
     }
     return items;
+}
+
+void TrackModel::setRating(qint64 id, int rating) {
+    auto it = m_index.find(id);
+    if (it == m_index.end() || m_all[it.value()].rating == rating) return;
+    m_all[it.value()].rating = rating;
+    int row = rowOf(id);
+    if (row >= 0) emit dataChanged(index(row), index(row), {RatingRole});
 }
 
 void TrackModel::setQuery(const QString &text) {

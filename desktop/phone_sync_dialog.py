@@ -22,6 +22,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import threading
 
 from PyQt6.QtCore import QSettings, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -43,6 +44,7 @@ import phone_link
 import phone_sync
 
 ATTEMPTS = 3
+LIVE: set = set()  # stopped jobs still ending
 
 
 class Job(QThread):
@@ -68,6 +70,7 @@ class SyncDialog(QDialog):
         # the program can show the changes.
         super().__init__(parent)
         self.db, self.synced, self.job = db, synced, None
+        self.stop = threading.Event()  # set when Close asks the job to stop
         self.setWindowTitle("Sync with Phone")
         self.resize(640, 460)
         self.settings = QSettings("music-tags", "phone-sync")
@@ -155,16 +158,33 @@ class SyncDialog(QDialog):
         self.settings.setValue("recent_codes", json.dumps(recent))
         self._fill_codes()
 
+    def reject(self) -> None:
+        self.close()  # Escape must act as Close
+
     def closeEvent(self, event) -> None:
+        # Close stops the transfer and closes at once: the requests in use
+        # are broken off, so a phone that went to sleep cannot keep the
+        # dialog open; the thread ends by itself and removes the work files.
         if self.job is not None and self.job.isRunning():
-            QMessageBox.information(
-                self,
-                "Sync with Phone",
-                "A transfer is still running; wait for it to finish.",
-            )
-            event.ignore()
-            return
+            self.stop.set()
+            if self.link is not None:
+                self.link.abort()
+            LIVE.add(self.job)  # the thread must outlive the dialog
+            self.job.setParent(None)
         event.accept()
+
+    def ended(self) -> None:
+        # The job finished after Close stopped it.
+        if self.tmp:
+            shutil.rmtree(self.tmp, ignore_errors=True)
+            self.tmp = ""
+        LIVE.discard(self.job)
+
+    def next_step(self, then, result) -> None:
+        if self.stop.is_set():
+            self.ended()
+        else:
+            then(result)
 
     def say(self, text: str) -> None:
         self.log.appendPlainText(text)
@@ -178,8 +198,9 @@ class SyncDialog(QDialog):
     def run_job(self, fn, then, on_fail=None) -> None:
         self.job = Job(fn, self)
         self.job.line.connect(self.say)
-        self.job.succeeded.connect(then)
-        self.job.failed.connect(on_fail or self.fail)
+        failed = on_fail or self.fail
+        self.job.succeeded.connect(lambda r: self.next_step(then, r))
+        self.job.failed.connect(lambda e: self.next_step(failed, e))
         self.job.start()
 
     def fail(self, error) -> None:
@@ -281,6 +302,7 @@ class SyncDialog(QDialog):
             self.report = report
         else:  # a second round: keep what the first one found
             self.report.paths += report.paths
+            self.report.changes += report.changes
             self.report.playlists_changed |= report.playlists_changed
 
         def push(log):
@@ -328,12 +350,20 @@ class SyncDialog(QDialog):
             )
             failed = (
                 phone_files.copy_files(
-                    todo, lambda source, rel: link.put_file(source, rel), 2, log
+                    todo,
+                    lambda source, rel: link.put_file(source, rel),
+                    2,
+                    log,
+                    self.stop.is_set,
                 )
                 if todo
                 else 0
             )
-            link.done()
+            if not self.stop.is_set():
+                try:
+                    link.done()
+                except phone_link.LinkError:
+                    pass  # the phone is gone; the next sync compares again
             return failed
 
         self.run_job(copy, lambda failed: self.completed(not failed))

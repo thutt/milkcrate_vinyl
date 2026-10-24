@@ -85,6 +85,9 @@ Not done by this script
   * Loudness for volume leveling: desktop/loudness.py
   * Tempo (BPM): desktop/bpm_batch.py
 
+Both can also be run on selected files from the editor and the player
+(03).
+
 Next
 ----
 
