@@ -46,6 +46,14 @@
   root (a sample is enough), so a root one folder too deep or too shallow is
   caught.  Same check for the phone app: one message when the library folder
   is missing instead of a "Not on this device" for each song.
+- [ ] **Desktop: copy a snippet of a track to a file (requested 2026-10-27):**
+  save a chosen part of a track as its own audio file, for example to use as a
+  ringtone.  Never touches the original file or the database.  Open
+  decisions: how the start and end are chosen (type times, or mark them while
+  the track plays; a short preview before saving); the output format (a
+  ringtone is usually MP3 or M4A/AAC, and a phone has a length limit); optional
+  fade in and out; where the file is saved; whether the tags are copied.
+  ffmpeg is already a prerequisite, so it can do the cutting.
 
 ## Proposed, not yet confirmed
 
