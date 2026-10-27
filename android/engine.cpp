@@ -107,11 +107,20 @@ void Engine::setMuted(bool on) {
 // -- the equalizer --
 
 void Engine::setEqualizer(bool on, const QVector<double> &gains,
-                          bool automatic) {
+                          bool automatic, const QList<CustomEq> &customs) {
     m_eqOn = on;  // takes effect with the next song
     m_eqGains = gains;
     m_eqGains.resize(Equalizer::Bands);
-    if (automatic != m_eqAuto) {
+    const bool changed = customs.size() != m_customs.size() ||
+                         [&] {
+                             for (int i = 0; i < customs.size(); ++i)
+                                 if (customs[i].name != m_customs[i].name ||
+                                     customs[i].gains != m_customs[i].gains)
+                                     return true;
+                             return false;
+                         }();
+    m_customs = customs;
+    if (automatic != m_eqAuto || (automatic && changed)) {
         m_eqAuto = automatic;
         chooseEqPreset(m_currentId);
     }
@@ -124,7 +133,7 @@ void Engine::setEqualizer(bool on, const QVector<double> &gains,
 const double *Engine::eqGains() const {
     static const double flat[Equalizer::Bands] = {0, 0, 0, 0, 0};
     if (!m_eqOn) return flat;
-    return m_eqAuto && m_autoPreset ? m_autoPreset->gains
+    return m_eqAuto && m_autoChosen ? m_autoGains.constData()
                                     : m_eqGains.constData();
 }
 
@@ -133,9 +142,23 @@ void Engine::applyEqGains() {
 }
 
 void Engine::chooseEqPreset(qint64 id) {
-    m_autoPreset = nullptr;
-    if (m_eqAuto && id >= 0) m_autoPreset = eqPresetForGenres(readGenres(id));
-    emit eqChosen(m_autoPreset ? QString(m_autoPreset->name) : QString());
+    m_autoChosen = false;
+    m_autoName.clear();
+    if (m_eqAuto && id >= 0) {
+        const QStringList genres = readGenres(id);
+        const int custom = eqCustomForGenres(m_customs, genres);
+        if (custom >= 0) {
+            m_autoName = m_customs[custom].name;
+            m_autoGains = m_customs[custom].gains;
+            m_autoGains.resize(5);
+            m_autoChosen = true;
+        } else if (const EqPreset *p = eqPresetForGenres(genres)) {
+            m_autoName = p->name;
+            m_autoGains = QVector<double>(p->gains, p->gains + 5);
+            m_autoChosen = true;
+        }
+    }
+    emit eqChosen(m_autoName);
 }
 
 // The engine thread also feeds the sound; time spent waiting here is time the

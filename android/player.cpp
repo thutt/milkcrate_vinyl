@@ -6,7 +6,13 @@
 // see the file LICENSE for the license text.
 #include "player.h"
 
+#include "buildstamp.h"
+
 #include "dynamic.h"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include "eqpresets.h"
 
 #include <QDebug>
@@ -53,6 +59,16 @@ Player::Player(QObject *parent)
     QStringList saved = m_settings.value("eqGains").toStringList();
     for (int i = 0; i < saved.size() && i < m_eqGains.size(); ++i)
         m_eqGains[i] = std::clamp(saved[i].toDouble(), -12.0, 12.0);
+    const QJsonArray custom = QJsonDocument::fromJson(
+        m_settings.value("eqCustom").toString().toUtf8()).array();
+    for (const QJsonValue &v : custom) {
+        CustomEq c;
+        c.name = v.toObject()["name"].toString();
+        for (const QJsonValue &g : v.toObject()["gains"].toArray())
+            c.gains << std::clamp(g.toDouble(), -12.0, 12.0);
+        c.gains.resize(5);
+        if (!c.name.isEmpty()) m_eqCustom << c;
+    }
     m_shuffle = m_settings.value("shuffle", false).toBool();
 
     m_engine->moveToThread(&m_thread);
@@ -67,6 +83,7 @@ Player::Player(QObject *parent)
                 m_rating = -1;
                 emit ratingChanged();
                 emit currentChanged();
+                showBpm(id);
             });
     connect(m_engine, &Engine::ratingKnown, this,
             [this](qint64 id, int rating) {
@@ -136,6 +153,8 @@ Player::Player(QObject *parent)
     });
     m_poll.start(250);
 }
+
+QString Player::build() const { return QStringLiteral(MILKCRATE_BUILD); }
 
 Player::~Player() {
     QThreadPool::globalInstance()->waitForDone(
@@ -368,7 +387,7 @@ static void startLogFile(const QString &path) {
         return;
     }
     g_oldHandler = qInstallMessageHandler(logToFile);
-    qInfo("---- app started");
+    qInfo("---- app started, build %s", MILKCRATE_BUILD);
 }
 
 void Player::start() {
@@ -430,6 +449,7 @@ void Player::reload() {
     QString playlistError;
     m_playlists.setItems(loadPlaylists(m_dbPath, &playlistError));
     countMatched();
+    refreshStats();
     if (!playlistError.isEmpty()) {
         say(playlistError);
         return;
@@ -439,7 +459,7 @@ void Player::reload() {
 }
 
 void Player::setShuffle(bool on) {
-    if (on == m_shuffle) return;
+    if (on == m_shuffle || !shuffleAvailable()) return;
     m_shuffle = on;
     m_settings.setValue("shuffle", on);
     onEngine([e = m_engine, on] { e->setShuffle(on); });
@@ -480,7 +500,41 @@ QStringList Player::eqBands() const {
 QStringList Player::eqPresets() const {
     QStringList names;
     for (int i = 0; i < eqPresetCount; ++i) names << ::eqPresets[i].name;
+    return names + eqCustomNames();
+}
+
+QStringList Player::eqCustomNames() const {
+    QStringList names;
+    for (const CustomEq &c : m_eqCustom) names << c.name;
     return names;
+}
+
+// The gains of a built-in or saved preset.
+bool Player::presetGains(const QString &name, QVector<double> &gains) const {
+    for (int i = 0; i < eqPresetCount; ++i)
+        if (name == ::eqPresets[i].name) {
+            gains = QVector<double>(::eqPresets[i].gains,
+                                    ::eqPresets[i].gains + 5);
+            return true;
+        }
+    for (const CustomEq &c : m_eqCustom)
+        if (name == c.name) {
+            gains = c.gains;
+            return true;
+        }
+    return false;
+}
+
+void Player::saveEqCustom() {
+    QJsonArray list;
+    for (const CustomEq &c : m_eqCustom) {
+        QJsonArray gains;
+        for (double g : c.gains) gains << g;
+        list << QJsonObject{{"name", c.name}, {"gains", gains}};
+    }
+    m_settings.setValue(
+        "eqCustom",
+        QString::fromUtf8(QJsonDocument(list).toJson(QJsonDocument::Compact)));
 }
 
 QVariantList Player::eqGains() const {
@@ -494,17 +548,18 @@ QString Player::eqPreset() const {
         if (std::equal(m_eqGains.begin(), m_eqGains.end(),
                        ::eqPresets[i].gains))
             return ::eqPresets[i].name;
+    for (const CustomEq &c : m_eqCustom)
+        if (c.gains == m_eqGains) return c.name;
     return "Custom";
 }
 
 QVariantList Player::eqShownGains() const {
-    if (m_eqAuto)
-        for (int i = 0; i < eqPresetCount; ++i)
-            if (m_eqAutoName == ::eqPresets[i].name) {
-                QVariantList list;
-                for (double g : ::eqPresets[i].gains) list << g;
-                return list;
-            }
+    QVector<double> gains;
+    if (m_eqAuto && presetGains(m_eqAutoName, gains)) {
+        QVariantList list;
+        for (double g : gains) list << g;
+        return list;
+    }
     return eqGains();
 }
 
@@ -519,8 +574,9 @@ QString Player::eqSummary() const {
 }
 
 void Player::pushEq() {
-    onEngine([e = m_engine, on = m_eqOn, g = m_eqGains, a = m_eqAuto] {
-        e->setEqualizer(on, g, a);
+    onEngine([e = m_engine, on = m_eqOn, g = m_eqGains, a = m_eqAuto,
+              c = m_eqCustom] {
+        e->setEqualizer(on, g, a, c);
     });
 }
 
@@ -549,12 +605,44 @@ void Player::setEqBand(int band, double gainDb) {
 }
 
 void Player::setEqPreset(const QString &name) {
-    for (int n = 0; n < eqPresetCount; ++n)
-        if (name == ::eqPresets[n].name) {
-            for (int i = 0; i < 5; ++i) m_eqGains[i] = ::eqPresets[n].gains[i];
-            QStringList saved;
-            for (double g : m_eqGains) saved << QString::number(g);
-            m_settings.setValue("eqGains", saved);
+    QVector<double> gains;
+    if (!presetGains(name, gains)) return;
+    m_eqGains = gains;
+    QStringList saved;
+    for (double g : m_eqGains) saved << QString::number(g);
+    m_settings.setValue("eqGains", saved);
+    pushEq();
+    emit eqChanged();
+}
+
+QString Player::saveEqPreset(const QString &text) {
+    const QString name = text.simplified();
+    if (name.isEmpty()) return "Give the preset a name.";
+    for (int i = 0; i < eqPresetCount; ++i)
+        if (name.compare(::eqPresets[i].name, Qt::CaseInsensitive) == 0 ||
+            name.compare("Custom", Qt::CaseInsensitive) == 0)
+            return "That name is used by a built-in preset.";
+    int at = 0;
+    while (at < m_eqCustom.size() &&
+           m_eqCustom[at].name.compare(name, Qt::CaseInsensitive) != 0)
+        ++at;
+    if (at == m_eqCustom.size()) m_eqCustom << CustomEq();
+    m_eqCustom[at] = {name, m_eqGains};
+    std::sort(m_eqCustom.begin(), m_eqCustom.end(),
+              [](const CustomEq &a, const CustomEq &b) {
+                  return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+              });
+    saveEqCustom();
+    pushEq();
+    emit eqChanged();
+    return "";
+}
+
+void Player::deleteEqPreset(const QString &name) {
+    for (int i = 0; i < m_eqCustom.size(); ++i)
+        if (m_eqCustom[i].name == name) {
+            m_eqCustom.removeAt(i);
+            saveEqCustom();
             pushEq();
             emit eqChanged();
             return;
@@ -565,6 +653,15 @@ void Player::setPlayingList(qint64 id) {
     if (id == m_playingList) return;
     m_playingList = id;
     emit playingListChanged();
+    emit shuffleChanged();  // a dynamic playlist plays without shuffle
+}
+
+bool Player::isDynamic(qint64 playlistId) const {
+    for (int row = 0; row < m_playlists.rowCount(); ++row) {
+        const PlaylistInfo *p = m_playlists.atRow(row);
+        if (p && p->id == playlistId) return p->holdsDynamic;
+    }
+    return false;
 }
 
 void Player::playRow(int row) {
@@ -618,7 +715,7 @@ void Player::playPlaylist(int row) {
         QVector<Section> sections = playlistSections(m_dbPath, p->id);
         setPlayingList(p->id);
         onEngine([e = m_engine, sections = std::move(sections),
-                  shuffle = m_shuffle] { e->playSections(sections, shuffle); });
+                  shuffle = shuffle()] { e->playSections(sections, shuffle); });
         return;
     }
     QVector<QueueItem> items = playlistItems(m_dbPath, p->id);
@@ -626,13 +723,14 @@ void Player::playPlaylist(int row) {
         say("“" + p->name + "” has no tracks.");
         return;
     }
+    const bool shuffle = m_shuffle && !p->holdsDynamic;
     int start =
-        m_shuffle
+        shuffle
             ? int(QRandomGenerator::global()->bounded(quint32(items.size())))
             : 0;
     setPlayingList(p->id);
-    onEngine([e = m_engine, items = std::move(items), start,
-              shuffle = m_shuffle, id = p->id] {
+    onEngine([e = m_engine, items = std::move(items), start, shuffle,
+              id = p->id] {
         e->playQueue(items, start, shuffle, id);
     });
 }
@@ -651,9 +749,10 @@ void Player::countMatched() {
 void Player::openPlaylist(int row) {
     const PlaylistInfo *p = m_playlists.atRow(row);
     if (!p) return;
-    m_entries.setItems(playlistItems(m_dbPath, p->id));
+    showEntries(p->id);
     m_openName = p->name;
     m_openId = p->id;
+    m_openDynamic = p->kind == "dynamic";
     emit openChanged();
     m_openMatched = -1;  // counted in the background: the rules are matched
                          // against every track
@@ -681,7 +780,7 @@ void Player::playEntry(int row) {
         return;
     }
     setPlayingList(m_openId);
-    onEngine([e = m_engine, items, row, shuffle = m_shuffle, id = m_openId] {
+    onEngine([e = m_engine, items, row, shuffle = shuffle(), id = m_openId] {
         e->playQueue(items, row, shuffle, id);
     });
 }
@@ -690,8 +789,62 @@ void Player::nextSection() {
     onEngine([e = m_engine] { e->nextSection(); });
 }
 
+// The entries are shown at once; why a dynamic playlist chose each one needs
+// the whole library (over a second on the phone), so it is worked out in the
+// background and added to the rows when it is ready.
+void Player::showEntries(qint64 id) {
+    m_entries.setItems(playlistItems(m_dbPath, id));
+    QList<qint64> ids;
+    for (const QueueItem &t : m_entries.items()) ids << t.id;
+    if (ids.isEmpty()) return;
+    QThreadPool::globalInstance()->start([this, id, ids, path = m_dbPath] {
+        const QHash<qint64, QString> why = explainTracks(path, id, ids);
+        if (why.isEmpty()) return;
+        QMetaObject::invokeMethod(
+            this,
+            [this, id, why] {
+                if (id == m_openId) m_entries.setDetails(why);
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+// The plays of every song are worked out in the background (a pass over the
+// library); the rows of the Songs tab that are on screen show them.
+// The bars next to the playing song move to its beat.  The tag is read in the
+// background; until it is known, and for a song without one, the beat is 100.
+void Player::showBpm(qint64 id) {
+    if (m_bpm != 100) {
+        m_bpm = 100;
+        emit bpmChanged();
+    }
+    QThreadPool::globalInstance()->start([this, id, path = m_dbPath] {
+        double bpm = trackBpm(path, id);
+        if (bpm <= 0) bpm = 100;
+        bpm = std::clamp(bpm, 40.0, 240.0);
+        QMetaObject::invokeMethod(
+            this,
+            [this, id, bpm] {
+                if (id != m_currentId || bpm == m_bpm) return;
+                m_bpm = bpm;
+                emit bpmChanged();
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void Player::refreshStats() {
+    QThreadPool::globalInstance()->start([this, path = m_dbPath] {
+        const QHash<qint64, SongStat> stats = songStats(path);
+        QMetaObject::invokeMethod(
+            this, [this, stats] { m_model.setStats(stats); },
+            Qt::QueuedConnection);
+    });
+}
+
 void Player::reloadPlaylists() {
     m_playlists.setItems(loadPlaylists(m_dbPath));
     countMatched();
-    if (m_openId >= 0) m_entries.setItems(playlistItems(m_dbPath, m_openId));
+    refreshStats();
+    if (m_openId >= 0) showEntries(m_openId);
 }

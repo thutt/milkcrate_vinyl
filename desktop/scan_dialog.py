@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QMessageBox,
     QProgressDialog,
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 import library_scan
@@ -64,7 +66,13 @@ def scan_library(parent, db, normalize) -> bool:
         QMessageBox.information(
             parent,
             "Scan for new files",
-            f"Nothing to do: all {result.unchanged} files match the database.",
+            f"Nothing to do: all {result.unchanged} files match the database."
+            + (
+                f"\n\n{len(result.ignored)} ignored files were skipped"
+                " (File > Ignored Scan Files)."
+                if result.ignored
+                else ""
+            ),
         )
         return False
 
@@ -101,15 +109,222 @@ def scan_library(parent, db, normalize) -> bool:
     return True
 
 
+GROUPS = (
+    ("add", "Add to database"),
+    ("ignore", "Ignore in future"),
+    ("delete", "Delete from disk"),
+)
+PATH_ROLE = Qt.ItemDataRole.UserRole
+TEXT_ROLE = Qt.ItemDataRole.UserRole + 1  # lower case text, for the filter
+
+
+def _file_tree(headers: list[str]) -> QTreeWidget:
+    tree = QTreeWidget()
+    tree.setHeaderLabels(headers)
+    tree.setRootIsDecorated(False)
+    tree.setColumnWidth(0, 340)
+    tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+    tree.setSortingEnabled(True)
+    tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+    return tree
+
+
+def _filter_tree(tree: QTreeWidget, text: str) -> None:
+    words = text.lower().split()
+    for i in range(tree.topLevelItemCount()):
+        item = tree.topLevelItem(i)
+        hay = item.data(0, TEXT_ROLE)
+        item.setHidden(not all(w in hay for w in words))
+
+
+class FoundPage(QWidget):
+    # The new files, in two columns.  Left: the files found and not yet
+    # decided on.  Right: what to do with the files moved there.  Nothing is
+    # done until the dialog is applied.
+    changed = pyqtSignal()
+
+    def __init__(self, cells, paths: list[str]):
+        super().__init__()
+        self.cells = cells  # cells(path) -> the text of the row's columns
+        headers = ["File", "Title", "Artist", "Album"]
+        self.found = _file_tree(headers)
+        self.groups = {key: _file_tree(headers) for key, _t in GROUPS}
+        self.found_label = QLabel()
+        self.group_labels = {key: QLabel() for key, _t in GROUPS}
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText(
+            "Filter the found files (words in the path, title, artist or"
+            " album)"
+        )
+        self.filter.setClearButtonEnabled(True)
+        self.filter.textChanged.connect(
+            lambda text: _filter_tree(self.found, text)
+        )
+        left = QVBoxLayout()
+        left.addWidget(self.found_label)
+        left.addWidget(self.filter)
+        left.addWidget(self.found)
+        middle = QVBoxLayout()
+        middle.addStretch()
+        for key, title in GROUPS:
+            button = QPushButton(f"{title}  ▸")
+            button.setToolTip(
+                "Move the selected files (the shown ones) to the list on the"
+                " right"
+            )
+            button.clicked.connect(lambda _=False, k=key: self._move_to(k))
+            middle.addWidget(button)
+        back = QPushButton("◂  Put back")
+        back.setToolTip("Move the selected files on the right back")
+        back.clicked.connect(self._put_back)
+        middle.addWidget(back)
+        middle.addStretch()
+        right = QVBoxLayout()
+        for key, _title in GROUPS:
+            right.addWidget(self.group_labels[key])
+            right.addWidget(self.groups[key])
+        row = QHBoxLayout(self)
+        row.addLayout(left, 3)
+        row.addLayout(middle)
+        row.addLayout(right, 2)
+        self.found.setSortingEnabled(False)
+        for path in paths:
+            self._add(self.found, path)
+        self.found.setSortingEnabled(True)
+        self._count()
+
+    def _add(self, tree: QTreeWidget, path: str) -> None:
+        cells = self.cells(path)
+        item = QTreeWidgetItem(cells)
+        item.setData(0, PATH_ROLE, path)
+        item.setData(0, TEXT_ROLE, " ".join([path] + cells).lower())
+        tree.addTopLevelItem(item)
+
+    def add_found(self, path: str) -> None:
+        self._add(self.found, path)
+        _filter_tree(self.found, self.filter.text())
+        self._count()
+
+    def _take(self, tree: QTreeWidget) -> list[str]:
+        paths = []
+        for item in tree.selectedItems():
+            if not item.isHidden():
+                paths.append(item.data(0, PATH_ROLE))
+                tree.invisibleRootItem().removeChild(item)
+        return paths
+
+    def _move(self, source: QTreeWidget, target: QTreeWidget) -> None:
+        target.setSortingEnabled(False)
+        for path in self._take(source):
+            self._add(target, path)
+        target.setSortingEnabled(True)
+        _filter_tree(self.found, self.filter.text())
+        self._count()
+
+    def _move_to(self, key: str) -> None:
+        self._move(self.found, self.groups[key])
+
+    def _put_back(self) -> None:
+        for tree in self.groups.values():
+            self._move(tree, self.found)
+
+    def _count(self) -> None:
+        self.found_label.setText(
+            f"Found, not decided yet ({self.found.topLevelItemCount()})"
+        )
+        for key, title in GROUPS:
+            self.group_labels[key].setText(
+                f"{title} ({self.groups[key].topLevelItemCount()})"
+            )
+        self.changed.emit()
+
+    def refresh(self) -> None:
+        # The text of the rows changed (the ALBUM option).
+        for tree in [self.found] + list(self.groups.values()):
+            for i in range(tree.topLevelItemCount()):
+                item = tree.topLevelItem(i)
+                path = item.data(0, PATH_ROLE)
+                cells = self.cells(path)
+                for column, text in enumerate(cells):
+                    item.setText(column, text)
+                item.setData(0, TEXT_ROLE, " ".join([path] + cells).lower())
+
+    def paths(self, key: str) -> list[str]:
+        tree = self.groups[key]
+        return [
+            tree.topLevelItem(i).data(0, PATH_ROLE)
+            for i in range(tree.topLevelItemCount())
+        ]
+
+
+class IgnoredPage(QWidget):
+    # The files that scans skip.  "Stop ignoring" takes files off the list
+    # (when the dialog is applied).
+    removed = pyqtSignal(list)
+
+    def __init__(self, paths: list[str]):
+        super().__init__()
+        self.tree = _file_tree(["Ignored file"])
+        self.tree.setColumnWidth(0, 600)
+        self.label = QLabel()
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("Filter the ignored files")
+        self.filter.setClearButtonEnabled(True)
+        self.filter.textChanged.connect(
+            lambda text: _filter_tree(self.tree, text)
+        )
+        self.tree.setSortingEnabled(False)
+        for path in paths:
+            item = QTreeWidgetItem([path])
+            item.setData(0, PATH_ROLE, path)
+            item.setData(0, TEXT_ROLE, path.lower())
+            self.tree.addTopLevelItem(item)
+        self.tree.setSortingEnabled(True)
+        stop = QPushButton("Stop ignoring selected files")
+        stop.clicked.connect(self._stop)
+        box = QVBoxLayout(self)
+        note = QLabel(
+            "Scans do not list these files. Select files and stop ignoring"
+            " them to have a scan list them again."
+        )
+        note.setWordWrap(True)
+        box.addWidget(note)
+        box.addWidget(self.label)
+        box.addWidget(self.filter)
+        box.addWidget(self.tree)
+        box.addWidget(stop)
+        self._count()
+
+    def _stop(self) -> None:
+        gone = []
+        for item in self.tree.selectedItems():
+            if not item.isHidden():
+                gone.append(item.data(0, PATH_ROLE))
+                self.tree.invisibleRootItem().removeChild(item)
+        self._count()
+        if gone:
+            self.removed.emit(gone)
+
+    def _count(self) -> None:
+        self.label.setText(f"Ignored files ({self.tree.topLevelItemCount()})")
+
+    def paths(self) -> list[str]:
+        return [
+            self.tree.topLevelItem(i).data(0, PATH_ROLE)
+            for i in range(self.tree.topLevelItemCount())
+        ]
+
+
 class ScanDialog(QDialog):
     def __init__(
         self, parent, db, result: library_scan.Scan, entries: dict[str, dict]
     ):
         super().__init__(parent)
         self.setWindowTitle("Scan for new files")
-        self.resize(900, 600)
+        self.resize(1150, 650)
         self.db, self.result, self.entries = db, result, entries
         self.added: list[str] = []
+        self.unignored: set[str] = set()
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
@@ -123,10 +338,22 @@ class ScanDialog(QDialog):
             "Set ALBUM from the folder name where a new file has none"
         )
         self.album.setChecked(True)
-        self.album.toggled.connect(self._fill_new)
-        self.new_tree = self._tree(
-            ["File", "Title", "Artist", "Album", "Cleanup"]
+        self.found = FoundPage(self._cells, result.new)
+        self.album.toggled.connect(lambda _: self.found.refresh())
+        self.found.changed.connect(self._titles)
+        new_page = QWidget()
+        box = QVBoxLayout(new_page)
+        note = QLabel(
+            "Select files on the left (Shift or Ctrl-click, Ctrl+A) and move"
+            " them to what should happen to them. Files left on the left are"
+            " not touched and are listed again by the next scan. Nothing is"
+            " done until you click Apply."
         )
+        note.setWordWrap(True)
+        box.addWidget(note)
+        box.addWidget(self.album)
+        box.addWidget(self.found)
+        self.tabs.addTab(new_page, "")
         self.missing_tree = self._tree(
             ["File", "Title", "Artist", "Album", "Plays"]
         )
@@ -139,17 +366,7 @@ class ScanDialog(QDialog):
         ])
         self.tabs.addTab(
             self._page(
-                self.new_tree,
-                self.album,
-                "New files are added with their tags. Untick a file to leave it"
-                " out.",
-            ),
-            "",
-        )
-        self.tabs.addTab(
-            self._page(
                 self.missing_tree,
-                None,
                 "These files are in the database but no longer under the music"
                 " folder. Tick the ones to remove from the database (with their"
                 " play counts, ratings and playlist entries); nothing is"
@@ -161,14 +378,15 @@ class ScanDialog(QDialog):
         self.tabs.addTab(
             self._page(
                 self.changed_tree,
-                None,
                 "These files changed on disk. Re-reading replaces the stored"
                 " tags, so any edits made in the database are lost. Tick the"
                 " ones to re-read.",
             ),
             "",
         )
-        self._fill_new()
+        self.ignored = IgnoredPage(db.scan_ignored())
+        self.ignored.removed.connect(self._stop_ignoring)
+        self.tabs.addTab(self.ignored, "")
         for path in result.missing:
             tags = db.tags[path]
             self._row(
@@ -207,6 +425,28 @@ class ScanDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _cells(self, path: str) -> list[str]:
+        tags, _notes = library_scan.clean(
+            path, self.entries[path], self.album.isChecked()
+        )
+        error = self.entries[path].get("error")
+        return [
+            path,
+            f"unreadable: {error}" if error else _first(tags, "TITLE"),
+            _first(tags, "ARTIST"),
+            _first(tags, "ALBUM"),
+        ]
+
+    def _stop_ignoring(self, paths: list[str]) -> None:
+        # Files on disk that a scan skipped come back to the found list.
+        self.unignored.update(paths)
+        back = [p for p in paths if p in self.result.ignored]
+        entries = library_scan.read_files(self.result.root, back)
+        if entries:
+            self.entries.update(entries)
+            for path in back:
+                self.found.add_found(path)
+
     def _tree(self, headers: list[str]) -> QTreeWidget:
         tree = QTreeWidget()
         tree.setHeaderLabels(headers)
@@ -214,49 +454,32 @@ class ScanDialog(QDialog):
         tree.setColumnWidth(0, 420)
         tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         tree.itemChanged.connect(lambda *_: self._titles())
+        tree.itemChanged.connect(
+            lambda item, _c, t=tree: self._shift_click(t, item)
+        )
         return tree
 
-    def _page(self, tree: QTreeWidget, option, note: str):
-        from PyQt6.QtWidgets import QWidget
-
+    def _page(self, tree: QTreeWidget, note: str):
         page = QWidget()
         box = QVBoxLayout(page)
-        label = QLabel(note)
+        label = QLabel(note + " Shift-click a tick box to tick or untick all.")
         label.setWordWrap(True)
         box.addWidget(label)
-        if option:
-            box.addWidget(option)
-        row = QHBoxLayout()
-        for text, which in (
-            ("Tick all", "all"),
-            ("Untick all", "none"),
-            ("Tick selected rows", "sel+"),
-            ("Untick selected rows", "sel-"),
-        ):
-            button = QPushButton(text)
-            button.clicked.connect(lambda _=False, w=which: self._tick(tree, w))
-            row.addWidget(button)
-        row.addStretch()
-        box.addLayout(row)
         box.addWidget(tree)
         return page
 
-    def _tick(self, tree: QTreeWidget, which: str) -> None:
-        # Tick or untick every row, or only the selected rows (select many with
-        # Shift or Ctrl, or Ctrl+A).
-        items = (
-            [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
-            if which in ("all", "none")
-            else tree.selectedItems()
-        )
-        state = (
-            Qt.CheckState.Checked
-            if which in ("all", "sel+")
-            else Qt.CheckState.Unchecked
-        )
+    def _shift_click(self, tree: QTreeWidget, item: QTreeWidgetItem) -> None:
+        # Shift-click on a tick box sets every row to the state that click
+        # gave the box, so repeating it turns all on, then all off.
+        if not (
+            QApplication.keyboardModifiers()
+            & Qt.KeyboardModifier.ShiftModifier
+        ):
+            return
+        state = item.checkState(0)
         tree.blockSignals(True)
-        for item in items:
-            item.setCheckState(0, state)
+        for i in range(tree.topLevelItemCount()):
+            tree.topLevelItem(i).setCheckState(0, state)
         tree.blockSignals(False)
         self._titles()
 
@@ -271,39 +494,6 @@ class ScanDialog(QDialog):
         item.setData(0, Qt.ItemDataRole.UserRole, key)
         tree.addTopLevelItem(item)
 
-    def _fill_new(self) -> None:
-        old = {
-            self.new_tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole): (
-                self.new_tree.topLevelItem(i).checkState(0)
-            )
-            for i in range(self.new_tree.topLevelItemCount())
-        }
-        self.new_tree.blockSignals(True)
-        self.new_tree.clear()
-        for path in self.result.new:
-            tags, notes = library_scan.clean(
-                path, self.entries[path], self.album.isChecked()
-            )
-            error = self.entries[path].get("error")
-            self._row(
-                self.new_tree,
-                path,
-                [
-                    path,
-                    _first(tags, "TITLE"),
-                    _first(tags, "ARTIST"),
-                    _first(tags, "ALBUM"),
-                    f"unreadable: {error}" if error else "; ".join(notes),
-                ],
-                True,
-            )
-            if old.get(path) == Qt.CheckState.Unchecked:
-                self.new_tree.topLevelItem(
-                    self.new_tree.topLevelItemCount() - 1
-                ).setCheckState(0, Qt.CheckState.Unchecked)
-        self.new_tree.blockSignals(False)
-        self._titles()
-
     @staticmethod
     def _checked(tree: QTreeWidget) -> list[str]:
         return [
@@ -313,28 +503,76 @@ class ScanDialog(QDialog):
         ]
 
     def _titles(self) -> None:
-        for n, (tree, name) in enumerate((
-            (self.new_tree, "New"),
-            (self.missing_tree, "Missing"),
-            (self.changed_tree, "Changed"),
-        )):
+        decided = sum(len(self.found.paths(k)) for k, _t in GROUPS)
+        self.tabs.setTabText(
+            0,
+            f"New ({self.found.found.topLevelItemCount() + decided},"
+            f" {decided} decided)",
+        )
+        for n, (tree, name) in enumerate(
+            (
+                (self.missing_tree, "Missing"),
+                (self.changed_tree, "Changed"),
+            ),
+            1,
+        ):
             self.tabs.setTabText(
                 n,
                 f"{name} ({len(self._checked(tree))} of"
                 f" {tree.topLevelItemCount()})",
             )
+        self.tabs.setTabText(
+            3, f"Ignored ({self.ignored.tree.topLevelItemCount()})"
+        )
+
+    def accept(self) -> None:
+        doomed = self.found.paths("delete")
+        if doomed:
+            box = QMessageBox(
+                QMessageBox.Icon.Warning,
+                "Delete from disk",
+                f"Delete {len(doomed)} file{'s' if len(doomed) != 1 else ''}"
+                " from the disk, and the folders that become empty?\n\n"
+                + "\n".join(doomed[:8])
+                + ("\n..." if len(doomed) > 8 else "")
+                + "\n\nThis cannot be undone.",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.Cancel,
+                self,
+            )
+            box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            if box.exec() != QMessageBox.StandardButton.Yes:
+                return
+        super().accept()
 
     def apply(self) -> None:
-        # Back up, then add, remove and re-read the ticked files, writing a
-        # journal line for each.
-        new, missing, changed = (
-            self._checked(t)
-            for t in (self.new_tree, self.missing_tree, self.changed_tree)
+        # Back up, then add, remove and re-read the chosen files, writing a
+        # journal line for each; then ignore and delete.
+        new = self.found.paths("add")
+        ignore = self.found.paths("ignore")
+        doomed = self.found.paths("delete")
+        missing, changed = (
+            self._checked(t) for t in (self.missing_tree, self.changed_tree)
+        )
+        kept = [p for p in self.ignored.paths() if p not in self.unignored]
+        ignored = sorted(set(kept + ignore))
+        if ignored != self.db.scan_ignored():
+            self.db.set_scan_ignored(ignored)
+        backup = journal = ""
+        records = [{"action": "ignore", "path": p} for p in ignore] + [
+            {"action": "delete", "path": p} for p in doomed
+        ]
+        failed, folders = (
+            self.db.delete_from_disk(doomed) if doomed else ([], [])
         )
         if not (new or missing or changed):
+            if records:
+                journal = self.db.journal("scan", records)
+                self._report(
+                    0, 0, 0, len(ignore), len(doomed), failed, "", journal, ""
+                )
             return
         backup = self.db.backup("scan")
-        records = []
         new_entries = {}
         for path in new:
             tags, notes = library_scan.clean(
@@ -378,11 +616,39 @@ class ScanDialog(QDialog):
             p for p in missing if p in self.db.tags
         ]
         check = f" (CHECK FAILED for {len(bad)})" if bad else ""
+        self._report(
+            len(new),
+            len(missing),
+            len(changed),
+            len(ignore),
+            len(doomed),
+            failed,
+            backup,
+            journal,
+            check,
+        )
+
+    def _report(
+        self, added, removed, reread, ignore, doomed, failed, backup, journal,
+        check,
+    ) -> None:
+        text = (
+            f"Added {added}, removed {removed}, re-read {reread} files"
+            f"{check}; ignored {ignore}, deleted {doomed - len(failed)} from"
+            " the disk."
+        )
+        if failed:
+            text += (
+                f"\n{len(failed)} could not be deleted:\n"
+                + "\n".join(failed[:10])
+                + ("\n..." if len(failed) > 10 else "")
+            )
+        if backup:
+            text += f"\n\nBackup: {backup}"
         QMessageBox.information(
             self.parent(),
             "Scan for new files",
-            f"Added {len(new)}, removed {len(missing)}, re-read {len(changed)}"
-            f" files{check}.\n\nBackup: {backup}\nJournal: {journal}",
+            f"{text}\nJournal: {journal}",
         )
 
 
@@ -476,6 +742,26 @@ class DuplicatesDialog(QDialog):
             f"Marked {len(marks)} files.\n\nBackup: {backup}\nJournal:"
             f" {journal}",
         )
+
+
+def edit_ignored(parent, db) -> None:
+    # File > Ignored Scan Files: show the ignored files and stop ignoring some.
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Ignored scan files")
+    dialog.resize(800, 500)
+    layout = QVBoxLayout(dialog)
+    page = IgnoredPage(db.scan_ignored())
+    layout.addWidget(page)
+    buttons = QDialogButtonBox(
+        QDialogButtonBox.StandardButton.Ok
+        | QDialogButtonBox.StandardButton.Cancel
+    )
+    buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+    if dialog.exec() == QDialog.DialogCode.Accepted:
+        db.set_scan_ignored(page.paths())
 
 
 def _first(tags: dict, key: str) -> str:

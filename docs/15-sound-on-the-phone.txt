@@ -87,6 +87,35 @@ order above, round the list, and the sound changes at once.  After the
 sliders were moved by hand the name is "Custom"; the left arrow then
 selects the last preset and the right arrow the first.
 
+The bars
+--------
+
+The three bars beside the playing song (in the song list and on the
+playlist row) move in time with the song: each bar picks a new random
+height every beat, every half beat or every three quarters of a beat,
+using the song's BPM tag.  A song with a BPM of 0, or none, is taken as 100;
+values are kept between 40 and 240.  The top of a tall bar is red.
+Paused, the bars sink slowly to their lowest height.
+
+Saved presets
+-------------
+
+"Save as..." under the sliders keeps the five sliders under a name.
+Give a name that is not a built-in preset's (the name "Custom" is also
+taken); a name already saved is replaced.  A saved preset joins the
+arrow list after the built-in ones, in alphabetical order, and is
+shown by name whenever the sliders match it.  "Save as..." is locked
+while Automatic shows a song's preset.  "Delete" removes the saved
+preset whose name is shown; the sliders stay where they are and the
+name becomes "Custom".  Built-in presets cannot be deleted.
+
+With Automatic on, a saved preset is tried before the built-in rules:
+it is used for a song when one of the song's genres contains the
+preset's name, capitals ignored.  Name a preset "Prog" and a song with
+the genre "Progressive Rock; Prog Metal" gets it, not Rock or Metal.
+When several saved presets match, the one with the longest name wins.
+Saved presets are kept between runs, on the phone only.
+
 Manual and automatic settings
 -----------------------------
 
@@ -133,6 +162,8 @@ the song playing, and the preset name and the sliders show that preset.
 They are locked while it applies, because changing them would change
 settings that are not used.  A song with no matching genre uses the
 manual settings, and the arrows and sliders unlock.
+
+Saved presets (above) are tried first.  Otherwise:
 
 A genre selects a preset when its name contains one of these words
 (capitals do not matter).  The presets are tried in this order, and the

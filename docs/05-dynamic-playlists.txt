@@ -123,6 +123,30 @@ a primary; see 03).  This applies to filling, regenerating and
 refilling, to the "N matched" count and to Count matches, and on the
 phone.  To have a particular copy selected, make it the primary.
 
+A song counts as played when any file with the same artist and title
+was played.  The Play count and Last played rules, and sorting by Last
+played, use the plays of the whole song, summed over its files (the
+copies on other albums and in other formats, marked as duplicates or
+not).  So a song played from one copy is not selected through another
+copy that was never played.  The Rating rule still looks at the file.
+
+A song that no longer fits the rules leaves the list.  When the editor
+or the player starts, and after every sync, each dynamic playlist drops
+the songs its rules no longer select (a song played from another copy,
+a rating changed since the list was made) and is filled up again at the
+end.  When a song is played, any other copy of it on a dynamic playlist
+leaves at once.  The phone only tops its lists up; the desktop's lists
+replace them at the next sync.
+
+Why a song was chosen
+---------------------
+
+When a dynamic playlist is opened, its songs are listed in columns:
+Title, Artist and Album, then one column for each field the rules test
+or sort by (Last played (any copy), Rating, Genre, ...), so that the
+values behind each choice can be read.  On the phone, a second line
+under each song of a dynamic playlist gives the same values.
+
 Order and file types
 --------------------
 
@@ -219,6 +243,16 @@ Variations:
   * Add BPM < 110 and BPM > 0 for slower music (BPM 0 means unknown).
   * Use the playlist in a container with a time limit (see 06).
   * Other genres: Focus, Gym, Dinner.  A song can have several.
+
+Shuffle
+-------
+
+A dynamic playlist plays in its own order, so shuffle is off while it
+plays: the shuffle buttons of the desktop player and the phone are
+dimmed, and the Shuffle button of the Playlists tab does nothing for it.
+The order comes from the Sort setting of its rules (Random included).  A
+container or sequence that holds a dynamic playlist is played the same
+way.  Your shuffle choice returns when anything else plays.
 
 Other examples
 --------------

@@ -29,8 +29,25 @@ The list shows the songs that match every word typed.
   * A word matches at the start of a word only: "star" finds "Star
     Wars" and "Death Star", not "Mustard".
 
-There are no field prefixes (as in "artist:dio"), phrase quotes or "="
-as in the desktop player.  Each word is looked for in all four fields.
+Searching one field
+-------------------
+
+Without a prefix a word is looked for in all four fields, so "classical"
+also finds the song "Classical Gas".  A prefix limits a word to one
+field: title, artist, album, genre or path (the folder and file name).
+
+    genre:classical    songs whose genre starts a word with "classical",
+                       not "Classical Gas" by an artist of another genre
+    artist:dio         songs by Dio, not songs titled "Dio" or from a
+                       tribute album
+    album:"the wall"   a phrase, in the album only
+    =rock genre:=rock  whole words only: "rock", not "rockabilly"
+
+  * Quotes ("the wall") match words in that order, side by side.
+  * A leading "=" asks for the whole word: "=dio" finds Dio, not Dion.
+  * Text before a colon that is not one of the five names is searched
+    for as typed.
+  * Prefixes and plain words combine, and every test must match.
 
 Examples:
 

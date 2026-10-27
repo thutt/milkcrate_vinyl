@@ -350,6 +350,24 @@ class TagDb:
                 (str(max(1, int(length))),),
             )
 
+    def scan_ignored(self) -> list[str]:
+        # Files (relative to the music folder) that a scan does not list.
+        row = self.con.execute(
+            "SELECT value FROM meta WHERE key = 'scan_ignored'"
+        ).fetchone()
+        try:
+            return sorted(json.loads(row[0])) if row else []
+        except ValueError:
+            return []
+
+    def set_scan_ignored(self, paths: list[str]) -> None:
+        with self.con:
+            self.con.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES"
+                " ('scan_ignored', ?)",
+                (json.dumps(sorted(set(paths))),),
+            )
+
     def dynamic_ids(self) -> set[int]:
         return {
             r[0]
@@ -421,67 +439,81 @@ class TagDb:
 
     def _dynamic_played(self, path: str) -> list[int]:
         # This file was played: every dynamic playlist forgets it for good
-        # (until regenerated); where it was on the
-        # list it is replaced by a new selection added at the end.
+        # (until regenerated), and any other copy of the same song with it;
+        # where they were on the list they are replaced by a new selection
+        # added at the end.
         fid, changed = self.ids[path], []
+        key = dynamic_playlists.song_key(self, path)
         for pid, rules_json, played_json in list(
             self.con.execute(
                 "SELECT id, rules, played FROM playlist WHERE rules IS NOT NULL"
             )
         ):
             played = set(json.loads(played_json)) | {fid}
-            on_list = self.con.execute(
-                "SELECT 1 FROM playlist_item WHERE playlist_id = ? AND"
-                " file_id = ?",
-                (pid, fid),
-            ).fetchone()
+            copies = [
+                entry
+                for entry, p in self.playlist_entries(pid)
+                if dynamic_playlists.song_key(self, p) == key
+            ]
             with self.con:
                 self.con.execute(
                     "UPDATE playlist SET played = ? WHERE id = ?",
                     (json.dumps(sorted(played)), pid),
                 )
-                if not on_list:
+                if not copies:
                     continue
-                self.con.execute(
-                    "DELETE FROM playlist_item WHERE playlist_id = ? AND"
-                    " file_id = ?",
-                    (pid, fid),
+                self.con.executemany(
+                    "DELETE FROM playlist_item WHERE id = ?",
+                    [(entry,) for entry in copies],
                 )
             self._refill(pid, json.loads(rules_json), played)
             changed.append(pid)
         return changed
 
     def top_up_dynamic(self) -> list[int]:
-        # Fill every dynamic playlist that holds fewer tracks than the
-        # configured length (the length was raised,
-        # entries were removed, ...) with new tracks at the end.  Returns the
-        # playlists that changed.
+        # Drop the tracks that no longer fit the rules of every dynamic
+        # playlist (a song was played from another copy, a rating changed, ...)
+        # and fill the playlists that hold fewer tracks than the configured
+        # length (the length was raised, entries were removed, ...) with new
+        # tracks at the end.  Returns the playlists that changed.
         changed = []
+        songs = dynamic_playlists.song_stats(self)
         for pid, rules_json, played_json in list(
             self.con.execute(
                 "SELECT id, rules, played FROM playlist WHERE rules IS NOT NULL"
             )
         ):
-            (count,) = self.con.execute(
-                "SELECT COUNT(*) FROM playlist_item WHERE playlist_id = ?",
-                (pid,),
-            ).fetchone()
+            rules = json.loads(rules_json)
+            before = self.playlist_entries(pid)
+            fits = set(dynamic_playlists.matches(self, rules, songs=songs))
+            stale = [entry for entry, p in before if p not in fits]
+            if stale:
+                with self.con:
+                    self.con.executemany(
+                        "DELETE FROM playlist_item WHERE id = ?",
+                        [(entry,) for entry in stale],
+                    )
+                self.set_playlist_order(
+                    pid, [e for e, _p in self.playlist_entries(pid)]
+                )  # close the gaps
+            count = len(before) - len(stale)
             if count < self.dynamic_length():
                 self._refill(
-                    pid, json.loads(rules_json), set(json.loads(played_json))
+                    pid, rules, set(json.loads(played_json)), songs
                 )
-                if (
-                    self.con.execute(
-                        "SELECT COUNT(*) FROM playlist_item WHERE"
-                        " playlist_id = ?",
-                        (pid,),
-                    ).fetchone()[0]
-                    != count
-                ):
-                    changed.append(pid)
+            if stale or (
+                self.con.execute(
+                    "SELECT COUNT(*) FROM playlist_item WHERE playlist_id = ?",
+                    (pid,),
+                ).fetchone()[0]
+                != count
+            ):
+                changed.append(pid)
         return changed
 
-    def _refill(self, playlist_id: int, rules: dict, played: set[int]) -> None:
+    def _refill(
+        self, playlist_id: int, rules: dict, played: set[int], songs=None
+    ) -> None:
         # Top the list up to the configured length with tracks not on it and not
         # played since it was generated.
         entries = [p for _e, p in self.playlist_entries(playlist_id)]
@@ -489,7 +521,9 @@ class TagDb:
         exclude = set(entries) | {
             self.path_of[f] for f in played if f in self.path_of
         }
-        new = dynamic_playlists.matches(self, rules, exclude)[: max(missing, 0)]
+        new = dynamic_playlists.matches(self, rules, exclude, songs)[
+            : max(missing, 0)
+        ]
         with self.con:
             (end,) = self.con.execute(
                 "SELECT COALESCE(MAX(pos) + 1, 0) FROM playlist_item WHERE"
@@ -542,6 +576,16 @@ class TagDb:
             "end_mode": row[2],
             "when_empty": row[3],
         }
+
+    def holds_dynamic(self, playlist_id: int) -> bool:
+        # A dynamic playlist, or a container or sequence that holds one; such
+        # a list plays in its own order, never shuffled.
+        kind = self.kinds().get(playlist_id)
+        if kind == "dynamic":
+            return True
+        return kind in ("container", "sequence") and any(
+            self.holds_dynamic(m) for m in self.members(playlist_id)
+        )
 
     def members(self, parent_id: int) -> list[int]:
         # The ids of a container's playlists or a sequence's containers, in

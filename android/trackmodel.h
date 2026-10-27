@@ -15,6 +15,8 @@
 #include <QString>
 #include <QVector>
 
+#include "dynamic.h"
+
 struct Track {
     qint64 id = 0;
     QString path;  // relative to the music root
@@ -25,6 +27,8 @@ struct Track {
     bool measured = false;
     int rating = -1;  // 0 to 5 stars, -1 = not rated
     QString key;  // search text: lower case words separated by single spaces
+    QString keyTitle, keyArtist, keyAlbum, keyGenre,
+        keyPath;  // the same for one field, for "genre:rock"
     QString sortArtist, sortTitle, sortAlbum;
 };
 
@@ -37,6 +41,7 @@ struct QueueItem {
     bool measured = false;
     qint64 pos = -1;  // place in the playlist it came from
     int rating = -1;  // 0 to 5 stars, -1 = not rated (for the lists)
+    QString detail;   // why a dynamic playlist chose it (for the lists)
 };
 
 class TrackModel : public QAbstractListModel {
@@ -49,7 +54,8 @@ public:
         TitleRole,
         ArtistRole,
         AlbumRole,
-        RatingRole
+        RatingRole,
+        DetailRole
     };
     explicit TrackModel(QObject *parent = nullptr)
         : QAbstractListModel(parent) {}
@@ -71,17 +77,32 @@ public:
 
     void setQuery(const QString &text);
     void setRating(qint64 id, int rating);  // a row shows it at once
+    // the plays and last play of every song, by file id; a row shows them
+    // when the list asks for its text, so only the rows on screen cost time
+    void setStats(const QHash<qint64, SongStat> &stats);
     void setSort(const QString &key);  // "artist", "title", "album" or "path"
 signals:
     void countChanged();
 
 private:
+    struct Term {
+        int field;  // 0 = title, artist, album and genre together; else Field
+        QString text;  // searchKey of the word or phrase
+        bool whole;    // =word: the whole word, not its start
+        bool operator==(const Term &o) const {
+            return field == o.field && text == o.text && whole == o.whole;
+        }
+    };
     void rebuild();
+    QString statText(QHash<qint64, SongStat>::const_iterator it) const;
+    static QVector<Term> parseQuery(const QString &text);
+    static const QString &fieldKey(const Track &t, int field);
     QVector<Track> m_all;
     QHash<qint64, int> m_index;  // id -> position in m_all
     QVector<int> m_view;         // positions in m_all that are shown, in order
-    QStringList m_words;
+    QVector<Term> m_terms;
     QString m_sort = "artist";
+    QHash<qint64, SongStat> m_stats;
 };
 
 // The SD card (exFAT) cannot hold some names, so the library is copied to it

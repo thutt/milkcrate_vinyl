@@ -7,6 +7,7 @@
 #include "dynamic.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMutexLocker>
@@ -223,7 +224,81 @@ SortKey sortKey(const Track &t, const QString &field) {
     return k;
 }
 
-QVector<Track> loadTracks(QSqlDatabase db, const QSet<QString> &ruleFields) {
+// A spelling-insensitive form of a name, as the desktop's normalize().
+QString songName(const QString &name) {
+    QString out;
+    for (QChar c : name.normalized(QString::NormalizationForm_KD))
+        if (c.category() != QChar::Mark_NonSpacing) out += c;
+    out = out.toCaseFolded();
+    static const QRegularExpression joiner("\\s*[&+]\\s*|\\band\\b");
+    static const QRegularExpression marks("[^\\w\\s]|_");
+    out.replace(joiner, " and ");
+    out.remove(marks);
+    out = out.simplified();
+    if (out.startsWith("the ")) out = out.mid(4);
+    return out;
+}
+
+// The plays and the latest play of a track are those of its whole song: every
+// file with the same artist and title (the copies on other albums and in other
+// formats), so that a song played from one copy is not chosen through another.
+QHash<qint64, SongStat> computeSongStats(QSqlDatabase db) {
+    QHash<qint64, QString> artist, title;
+    QSqlQuery n(db);
+    n.setForwardOnly(true);
+    n.exec("SELECT file_id, name, value FROM tag WHERE name IN ('ARTIST', "
+           "'TITLE') ORDER BY file_id, name, pos");
+    while (n.next()) {
+        const qint64 id = n.value(0).toLongLong();
+        const QString value = n.value(2).toString();
+        if (value.trimmed().isEmpty()) continue;
+        if (n.value(1).toString() == "ARTIST")
+            artist[id] += (artist.contains(id) ? " " : "") + value;
+        else if (!title.contains(id))
+            title[id] = value;
+    }
+    struct Song {
+        qint64 plays = 0;
+        QString last;
+    };
+    QHash<QString, Song> songs;
+    QHash<qint64, QString> keyOf;
+    QSqlQuery q(db);
+    q.setForwardOnly(true);
+    q.exec("SELECT id, play_count, last_played FROM media_file");
+    while (q.next()) {
+        const qint64 id = q.value(0).toLongLong();
+        const QString key = artist.contains(id) && title.contains(id)
+                                ? songName(artist[id]) + '\x01' +
+                                      songName(title[id])
+                                : QString("#%1").arg(id);
+        keyOf.insert(id, key);
+        Song &song = songs[key];
+        song.plays += q.value(1).toLongLong();
+        const QString last = q.value(2).toString();
+        if (last > song.last) song.last = last;
+    }
+    QHash<qint64, SongStat> out;
+    out.reserve(keyOf.size());
+    for (auto it = keyOf.constBegin(); it != keyOf.constEnd(); ++it) {
+        const Song &song = songs[it.value()];
+        out.insert(it.key(), {song.plays, song.last});
+    }
+    return out;
+}
+
+void spreadSongPlays(QSqlDatabase db, QVector<Track> &tracks) {
+    const QHash<qint64, SongStat> stats = computeSongStats(db);
+    for (Track &t : tracks) {
+        auto it = stats.constFind(t.id);
+        if (it == stats.constEnd()) continue;
+        t.plays = it->plays;
+        t.last = it->last;
+    }
+}
+
+QVector<Track> loadTracks(QSqlDatabase db, const QSet<QString> &ruleFields,
+                          const QSet<qint64> *only = nullptr) {
     QSet<QString> tagNames = {"ARTIST", "ALBUMARTIST", "ALBUM", "TITLE",
                               "TRACKNUMBER"};
     static const QHash<QString, QString> extra = {
@@ -248,6 +323,7 @@ QVector<Track> loadTracks(QSqlDatabase db, const QSet<QString> &ruleFields) {
     while (q.next()) {
         Track t;
         t.id = q.value(0).toLongLong();
+        if (only && !only->contains(t.id)) continue;
         t.path = q.value(1).toString();
         if (!q.value(2).isNull()) t.rating = q.value(2).toLongLong();
         t.plays = q.value(3).toLongLong();
@@ -266,6 +342,8 @@ QVector<Track> loadTracks(QSqlDatabase db, const QSet<QString> &ruleFields) {
         if (it != index.constEnd())
             tracks[*it].tags[tq.value(1).toString()] << tq.value(2).toString();
     }
+    if (ruleFields.contains("plays") || ruleFields.contains("last_played"))
+        spreadSongPlays(db, tracks);
     return tracks;
 }
 
@@ -324,12 +402,103 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
     }
     QSet<QString> fields;
     collectFields(rules, fields);
+    fields.insert(rules["sort"].toObject()["field"].toString());
     QVector<Track> tracks = loadTracks(c.db(), fields);
     return chooseFrom(tracks, rules, exclude, limit);
 }
 
 // The counts only read, and take no lock: holding it for the whole rule
 // evaluation (over a second on the phone) kept the engine from starting songs.
+QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
+                                     const QList<qint64> &ids) {
+    Connection c(dbPath);
+    if (!c.ok) return {};
+    QSqlQuery q(c.db());
+    q.prepare("SELECT rules FROM playlist WHERE id = ?");
+    q.addBindValue(playlistId);
+    if (!q.exec() || !q.next() || q.value(0).isNull()) return {};
+    const QJsonObject rules =
+        QJsonDocument::fromJson(q.value(0).toString().toUtf8()).object();
+    QSet<QString> fields;
+    collectFields(rules, fields);
+    const QString sort = rules["sort"].toObject()["field"].toString("random");
+    if (sort != "random") fields.insert(sort);
+    QStringList order;  // the fields in the order the rules name them
+    std::function<void(const QJsonObject &)> walk = [&](const QJsonObject &g) {
+        for (const QJsonValue &item : g["rules"].toArray()) {
+            const QJsonObject o = item.toObject();
+            if (o.contains("field")) {
+                if (!order.contains(o["field"].toString()))
+                    order << o["field"].toString();
+            } else {
+                walk(o);
+            }
+        }
+    };
+    walk(rules);
+    if (sort != "random" && !order.contains(sort)) order << sort;
+    const QSet<qint64> wanted(ids.begin(), ids.end());
+    QElapsedTimer clock;
+    clock.start();
+    QVector<Track> tracks = loadTracks(c.db(), fields, &wanted);
+    qInfo("explain %lld songs of %lld: %lld ms", qint64(tracks.size()),
+          qint64(ids.size()), qint64(clock.elapsed()));
+    static const QHash<QString, QString> labels = {
+        {"genre", "Genre"},   {"composer", "Composer"}, {"year", "Year"},
+        {"bpm", "BPM"},       {"bpm_reliability", "BPM reliability"},
+        {"format", "Format"}, {"track", "Track"},       {"rating", "Rating"},
+        {"plays", "Plays (any copy)"},
+        {"last_played", "Last played (any copy)"}};
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QHash<qint64, QString> out;
+    for (const Track &t : tracks) {
+        QStringList parts;
+        for (const QString &f : order) {
+            if (!labels.contains(f)) continue;  // title, artist, album, path
+            QString text;
+            if (f == "rating") {
+                const int stars = t.rating ? int(*t.rating) : -1;
+                text = stars < 0 ? QString("not rated")
+                                 : QString(QChar(0x2605)).repeated(stars) +
+                                       QString(QChar(0x2606))
+                                           .repeated(5 - stars);
+            } else if (f == "plays") {
+                text = QString::number(t.plays);
+            } else if (f == "last_played") {
+                const QDateTime then =
+                    QDateTime::fromString(t.last, "yyyy-MM-ddTHH:mm:ssZ");
+                if (t.last.isEmpty() || !then.isValid()) {
+                    text = "never";
+                } else {
+                    const qint64 days =
+                        QDateTime(then.date(), then.time(), Qt::UTC)
+                            .daysTo(now);
+                    text = days < 1
+                               ? QString("today")
+                               : QString("%1 day%2 ago")
+                                     .arg(days)
+                                     .arg(days == 1 ? "" : "s");
+                }
+            } else if (f == "format") {
+                text = fileFormat(t.path);
+            } else if (f == "track") {
+                text = numberValue(t, "track")
+                           ? QString::number(*numberValue(t, "track"))
+                           : QString();
+            } else {
+                text = textValues(t, f).join("; ");
+                if (f == "year" || f == "bpm" || f == "bpm_reliability")
+                    text = numberValue(t, f)
+                               ? QString::number(*numberValue(t, f))
+                               : QString();
+            }
+            parts << labels[f] + ": " + (text.isEmpty() ? "-" : text);
+        }
+        out.insert(t.id, parts.join("  \u00b7  "));
+    }
+    return out;
+}
+
 int countMatches(const QString &dbPath, qint64 playlistId) {
     Connection c(dbPath);
     if (!c.ok) return -1;
@@ -468,4 +637,23 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
     }
     if (changed) ++dbGeneration();
     return changed;
+}
+
+QHash<qint64, SongStat> songStats(const QString &dbPath) {
+    Connection c(dbPath);
+    if (!c.ok) return {};
+    return computeSongStats(c.db());
+}
+
+double trackBpm(const QString &dbPath, qint64 id) {
+    Connection c(dbPath);
+    if (!c.ok) return 0;
+    QSqlQuery q(c.db());
+    q.prepare("SELECT value FROM tag WHERE file_id = ? AND name = 'BPM' "
+              "ORDER BY pos LIMIT 1");
+    q.addBindValue(id);
+    if (!q.exec() || !q.next()) return 0;
+    bool ok = false;
+    const double bpm = q.value(0).toString().trimmed().toDouble(&ok);
+    return ok && bpm > 0 ? bpm : 0;
 }

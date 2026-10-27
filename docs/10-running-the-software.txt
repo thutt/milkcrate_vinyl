@@ -77,7 +77,10 @@ match.
                      composer, path
 
 Without a field, the title, artist (also album artist), album, genre,
-composer and path are searched.
+composer and path are searched, so "classical" finds the genre and also
+the song "Classical Gas"; "genre:classical" finds only the genre.  The
+editor's file search (03) and the phone (12) use the same language; the
+phone has no composer.
 
 Rating.  Rating menu, Rating column, and the stars next to the playing
 song's name (07).  A song counts as played after 20 seconds of

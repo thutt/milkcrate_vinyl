@@ -28,10 +28,13 @@ class Player : public QObject {
     Q_PROPERTY(QString artist READ artist NOTIFY currentChanged)
     Q_PROPERTY(QString album READ album NOTIFY currentChanged)
     Q_PROPERTY(qint64 currentId READ currentId NOTIFY currentChanged)
+    Q_PROPERTY(double bpm READ bpm NOTIFY bpmChanged)  // of the song playing
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged)
     Q_PROPERTY(qint64 position READ position NOTIFY positionChanged)
     Q_PROPERTY(qint64 duration READ duration NOTIFY durationChanged)
     Q_PROPERTY(bool shuffle READ shuffle WRITE setShuffle NOTIFY shuffleChanged)
+    Q_PROPERTY(bool shuffleAvailable READ shuffleAvailable NOTIFY
+                   shuffleChanged)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(double target READ target WRITE setTarget NOTIFY volumeChanged)
     Q_PROPERTY(
@@ -42,6 +45,7 @@ class Player : public QObject {
     Q_PROPERTY(QString eqAutoName READ eqAutoName NOTIFY eqChanged)
     Q_PROPERTY(QStringList eqPresets READ eqPresets CONSTANT)
     Q_PROPERTY(QString eqPreset READ eqPreset NOTIFY eqChanged)
+    Q_PROPERTY(QStringList eqCustomNames READ eqCustomNames NOTIFY eqChanged)
     Q_PROPERTY(QStringList eqBands READ eqBands CONSTANT)
     Q_PROPERTY(QVariantList eqShownGains READ eqShownGains NOTIFY eqChanged)
     Q_PROPERTY(QString eqShownPreset READ eqShownPreset NOTIFY eqChanged)
@@ -49,8 +53,10 @@ class Player : public QObject {
     Q_PROPERTY(QString dbPath READ dbPath NOTIFY pathsChanged)
     Q_PROPERTY(QString musicRoot READ musicRoot NOTIFY pathsChanged)
     Q_PROPERTY(QString message READ message NOTIFY messageChanged)
+    Q_PROPERTY(QString build READ build CONSTANT)
     Q_PROPERTY(QString sectionText READ sectionText NOTIFY sectionChanged)
     Q_PROPERTY(QString openName READ openName NOTIFY openChanged)
+    Q_PROPERTY(bool openDynamic READ openDynamic NOTIFY openChanged)
     Q_PROPERTY(int openMatched READ openMatched NOTIFY
                    openMatchedChanged)  // library tracks the open dynamic
                                         // playlist's rules select (-1: not
@@ -71,6 +77,7 @@ public:
     EntryModel *entryModel() { return &m_entries; }
     QString sectionText() const { return m_sectionText; }
     QString openName() const { return m_openName; }
+    bool openDynamic() const { return m_openDynamic; }
     int openMatched() const { return m_openMatched; }
     qint64 playingList() const { return m_playingList; }
     int rating() const { return m_rating; }
@@ -83,10 +90,14 @@ public:
     QString artist() const { return m_artist; }
     QString album() const { return m_album; }
     qint64 currentId() const { return m_currentId; }
+    double bpm() const { return m_bpm; }
     bool playing() const { return m_engine->playing; }
     qint64 position() const { return m_engine->position; }
     qint64 duration() const { return m_engine->duration; }
-    bool shuffle() const { return m_shuffle; }
+    // A dynamic playlist plays in its own order: shuffling it makes little
+    // sense, so the shuffle is off (and cannot be switched on) while one plays.
+    bool shuffle() const { return m_shuffle && !isDynamic(m_playingList); }
+    bool shuffleAvailable() const { return !isDynamic(m_playingList); }
     double volume() const { return m_volume; }
     double target() const { return m_target; }
     bool leveling() const { return m_leveling; }
@@ -96,7 +107,8 @@ public:
     QString eqAutoName() const { return m_eqAutoName; }
     void setEqAuto(bool on);
     QVariantList eqGains() const;
-    QStringList eqPresets() const;
+    QStringList eqPresets() const;  // the built-in ones, then the saved ones
+    QStringList eqCustomNames() const;
     QString eqPreset() const;  // the preset the gains match, else "Custom"
     QStringList eqBands() const;  // "60 Hz", ...
     // what is being applied: the song's automatic preset if there is one,
@@ -107,9 +119,13 @@ public:
     void setEqOn(bool on);
     Q_INVOKABLE void setEqBand(int band, double gainDb);
     Q_INVOKABLE void setEqPreset(const QString &name);
+    // saves the current settings under a name; returns "" or why it cannot
+    Q_INVOKABLE QString saveEqPreset(const QString &name);
+    Q_INVOKABLE void deleteEqPreset(const QString &name);
     QString dbPath() const { return m_dbPath; }
     QString musicRoot() const { return m_root; }
     QString message() const { return m_message; }
+    QString build() const;
     bool needsFilesAccess() const { return m_needsFilesAccess; }
     void setShuffle(bool on);
     void setVolume(double v);
@@ -142,6 +158,8 @@ public:
     Q_INVOKABLE void newSyncCode();
     void reloadPlaylists();  // after a play was recorded: dynamic lists lose
                              // the track
+    void showBpm(qint64 id);  // the beat of the bars
+    void refreshStats();     // plays of each song, for the Songs tab
     void countMatched();     // library tracks matched by each dynamic playlist
                              // (background)
     void resumeCurrent();
@@ -153,6 +171,7 @@ public:
     Q_INVOKABLE void seek(qint64 ms);
 signals:
     void currentChanged();
+    void bpmChanged();
     void playingChanged();
     void positionChanged();
     void durationChanged();
@@ -186,7 +205,9 @@ private:
     PlaylistModel m_playlists;
     EntryModel m_entries;
     QString m_sectionText, m_openName;
+    bool m_openDynamic = false;  // rows keep room for the "why" line
     int m_openMatched = -1;
+    void showEntries(qint64 id);
     qint64 m_openId = -1;  // the playlist shown on the Playlists tab
     QThread m_thread;
     Engine *m_engine;
@@ -200,14 +221,19 @@ private:
     QString m_dbPath, m_root, m_message;
     QString m_title, m_artist, m_album;
     qint64 m_currentId = -1;
+    double m_bpm = 100;  // the song's BPM tag; 100 when it has none
     qint64 m_playingList = -1;  // the playlist, container or sequence the music
                                 // comes from; -1 = the Songs tab
     void setPlayingList(qint64 id);
+    bool isDynamic(qint64 playlistId) const;
     int m_rating = -1;  // of the playing track; -1 = not rated
     bool m_shuffle = false, m_leveling = true, m_needsFilesAccess = false;
     double m_volume = 1.0, m_target = -10.0;
     bool m_eqOn = false, m_eqAuto = false;
     QString m_eqAutoName;
     QVector<double> m_eqGains = QVector<double>(5, 0.0);
+    QList<CustomEq> m_eqCustom;  // saved presets, by name
+    void saveEqCustom();
+    bool presetGains(const QString &name, QVector<double> &gains) const;
     void pushEq();
 };

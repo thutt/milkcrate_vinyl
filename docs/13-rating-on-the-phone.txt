@@ -17,6 +17,11 @@ Where the rating is shown
     (filled for the rating, outlined for the rest) at the right; a song
     that is not rated shows none.  A rating set on the phone shows in
     the lists at once; ratings from the desktop show after a sync.
+  * Each row of the song list has a line of its own: "Plays: 12  .  Last
+    played: 3 days ago".  The plays and the date are those of the whole
+    song, every copy with the same artist and title (05).  They are
+    worked out in the background after the library is read and after a
+    song is counted, and a row shows them when it comes onto the screen.
   * When the playing song's row is not on the screen, the rating is
     shown in the control panel at the bottom, below the song's name.
   * On the lock screen and in the notification, the line under the

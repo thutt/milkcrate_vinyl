@@ -32,6 +32,8 @@ struct PlaylistInfo {
     qint64 id = 0;
     QString name, kind;  // kind: playlist, dynamic, container, sequence
     QString detail;
+    bool holdsDynamic = false;  // dynamic, or a container or sequence that
+                                // holds one: never shuffled
     int matched = -1;  // dynamic playlists: library tracks the rules select
                        // (-1: not counted yet)
 };
@@ -86,7 +88,8 @@ public:
         TitleRole,
         ArtistRole,
         AlbumRole,
-        RatingRole
+        RatingRole,
+        DetailRole
     };
     explicit EntryModel(QObject *parent = nullptr)
         : QAbstractListModel(parent) {}
@@ -97,6 +100,8 @@ public:
     QHash<int, QByteArray> roleNames() const override;
     void setItems(const QVector<QueueItem> &items);
     void setRating(qint64 id, int rating);  // a row shows it at once
+    // why a dynamic playlist chose each entry
+    void setDetails(const QHash<qint64, QString> &why);
     const QVector<QueueItem> &items() const { return m_items; }
 
 private:

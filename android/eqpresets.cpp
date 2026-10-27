@@ -70,3 +70,18 @@ const EqPreset *eqPresetForGenres(const QStringList &genres) {
                             return &eqPresets[i];
     return nullptr;
 }
+
+int eqCustomForGenres(const QList<CustomEq> &customs,
+                      const QStringList &genres) {
+    int best = -1;
+    for (int i = 0; i < customs.size(); ++i) {
+        if (best >= 0 && customs[i].name.size() <= customs[best].name.size())
+            continue;
+        for (const QString &genre : genres)
+            if (genre.contains(customs[i].name, Qt::CaseInsensitive)) {
+                best = i;
+                break;
+            }
+    }
+    return best;
+}

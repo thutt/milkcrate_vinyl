@@ -29,7 +29,10 @@ Wi-Fi sync from the player or editor
    unless the phone is not found.
 4. Leave "Also copy new music to the phone" checked to copy music, or
    uncheck it to sync the database only.
-5. Click Sync.  The log shows progress.
+5. Click Sync.  The log lists the steps, and the line under it says
+   what is happening now.  While music is copied, a bar shows the files
+   done of the total, and the line gives the file being copied, the GB
+   done of the total, the speed and the time left.
 
 The phone and the computer must be on the same Wi-Fi.  The phone is
 found by a UDP broadcast (port 8766); if that does not work, enter its
@@ -130,11 +133,14 @@ Songs often cannot be rated while driving.  When a sync from the player
 or editor takes plays or ratings from the phone, a "Changes from the
 phone" window opens after the sync dialog closes.  It lists those songs
 with their rating, what the desktop had before ("Was"), the play count
-and the last played time.  Click the stars to rate a song, or select
-songs and press 0 to 5 (Delete: not rated); right-click > Rate does the
-same.  "Only songs that are not rated" shows the ones still to rate.
-Each change is stored at once and, being newer than the phone's, goes to
-the phone at the next sync.
+and the last played time.  Click a star to rate a song (a song
+not yet rated shows five faint stars; a click anywhere else in the cell
+changes nothing), or select songs and press 0 to 5 (Delete: not rated);
+right-click > Rate does the same.  "Only songs that are not rated" shows
+the ones still to rate.  The ratings given are only shown in the list
+until Apply stores them and closes the window; Cancel (or Escape, after
+a question) closes it without storing them.  Being newer than the
+phone's, the stored ratings go to the phone at the next sync.
 
 File > Review Phone Changes reopens the list of the last sync until the
 program is closed.

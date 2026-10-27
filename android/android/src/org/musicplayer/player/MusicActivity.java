@@ -7,6 +7,7 @@
 package org.musicplayer.player;
 
 import android.content.Intent;
+import android.os.Bundle;
 
 import org.qtproject.qt.android.bindings.QtActivity;
 
@@ -17,6 +18,24 @@ import org.qtproject.qt.android.bindings.QtActivity;
  * nothing and Android finally reported the app as not responding).
  */
 public class MusicActivity extends QtActivity {
+    private static boolean started = false;
+
+    /**
+     * Android can destroy the activity while the music service keeps the
+     * process alive.  Qt cannot build its user interface a second time in the
+     * same process (the icon would show nothing, forever), so a second start
+     * ends the process and Android starts the app again in a new one.
+     */
+    @Override
+    public void onCreate(Bundle state) {
+        if (started) {
+            stopService(new Intent(this, PlaybackService.class));
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }
+        started = true;
+        super.onCreate(state);
+    }
+
     @Override
     protected void onDestroy() {
         if (isFinishing()) {

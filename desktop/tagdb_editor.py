@@ -87,6 +87,7 @@ from rating_delegate import (
     RatingDelegate,
 )
 from bulk_values import change_value
+from search import parse_search, search_fields
 from analysis_actions import detect_bpm, measure_loudness
 from path_display import PathDelegate, ROOT_ROLE, full_path
 from phone_review import review_phone_changes
@@ -138,10 +139,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.resize(1250, 720)
         self.db = db
-        # dynamic playlists that are short (a longer length, removed entries)
-        # are filled
-        self.db.top_up_dynamic()
         self.current: list[str] = []
+        self._load_generation = 0
         self.cells: dict[str, list[QStandardItem]] = {}
         self._quiet = False
         self._root = ""  # the music root, as the database records it
@@ -263,7 +262,7 @@ class MainWindow(QMainWindow):
         tag_row.addStretch()
         self.file_search = QLineEdit()
         self.file_search.setPlaceholderText(
-            "Search files: every word must match the path or any tag value..."
+            "Search files: words, =whole, \"phrase\", genre:rock ..."
         )
         self.file_search.setClearButtonEnabled(True)
         self.file_search_timer = QTimer(self)
@@ -273,7 +272,7 @@ class MainWindow(QMainWindow):
         self.file_search.textChanged.connect(
             lambda _: self.file_search_timer.start()
         )
-        self._haystacks: dict[str, str] = {}
+        self._haystacks: dict[str, dict[str, str]] = {}
         files_page = QWidget()
         files_layout = QVBoxLayout(files_page)
         files_layout.setContentsMargins(0, 0, 0, 0)
@@ -338,7 +337,13 @@ class MainWindow(QMainWindow):
         )
 
         self._make_actions()
-        self.load()
+        self.load(background=True)
+
+    def tidy_playlists(self) -> None:
+        # Dynamic playlists that are short (a longer length, removed entries)
+        # are filled; done after the window is shown.
+        if self.db.top_up_dynamic():
+            self.playlist_panel.refresh()
 
     def _suggest(self, key: str) -> list[str]:
         # Existing values to pick from when editing a tag; none if there are too
@@ -362,6 +367,7 @@ class MainWindow(QMainWindow):
         for text, shortcut, slot in (
             ("&Open Database...", QKeySequence.StandardKey.Open, self.open_db),
             ("S&can for New Files...", None, self.scan_for_files),
+            ("&Ignored Scan Files...", None, self.ignored_files),
             ("&Save", QKeySequence.StandardKey.Save, self.save),
             ("S&ync with Phone...", None, self.sync_phone),
             ("&Review Phone Changes...", None, self.review_phone),
@@ -602,7 +608,15 @@ class MainWindow(QMainWindow):
             " empty (cannot be undone)"
         )
         box.setCheckBox(erase)
-        if box.exec() != QMessageBox.StandardButton.Yes:
+        ignore = box.addButton(
+            "Yes, and ignore them in scans",
+            QMessageBox.ButtonRole.YesRole,
+        )
+        box.exec()
+        if box.clickedButton() not in (
+            box.button(QMessageBox.StandardButton.Yes),
+            ignore,
+        ):
             return
         backup = self.db.backup("remove-files")
         journal = self.db.journal(
@@ -621,11 +635,13 @@ class MainWindow(QMainWindow):
         self.db.remove_files(files)
         left = [p for p in files if p in self.db.tags]
         gone = [p for p in files if p not in left]
+        if box.clickedButton() is ignore:
+            self.db.set_scan_ignored(self.db.scan_ignored() + gone)
         failed, folders = (
             self.db.delete_from_disk(gone) if erase.isChecked() else ([], [])
         )
         self.playlist_panel.set_db(self.db)
-        self.load()
+        self._drop_rows(gone)
         text = (
             f"Removed {len(files) - len(left)}"
             f" files{f' ({len(left)} FAILED)' if left else ''}."
@@ -647,6 +663,66 @@ class MainWindow(QMainWindow):
             f"{text}\n\nBackup: {backup}\nJournal: {journal}",
         )
 
+    def _drop_rows(self, paths: list[str]) -> None:
+        self._sync_rows(paths, [], [])
+
+    def _sync_rows(
+        self, removed: list[str], added: list[str], changed: list[str]
+    ) -> None:
+        # Bring the tree up to date after files were removed, added or re-read;
+        # rebuilding all of it takes over a second.
+        self._quiet = True
+        root = self.model.invisibleRootItem()
+        rows: dict[int, tuple[QStandardItem, list[int]]] = {}
+        for path in removed:
+            item = self.cells.pop(path)[0]
+            self._haystacks.pop(path, None)
+            parent = item.parent() or root
+            rows.setdefault(id(parent), (parent, []))[1].append(item.row())
+        for parent, numbers in rows.values():
+            # contiguous rows go at once: one by one takes a millisecond each
+            numbers.sort(reverse=True)
+            start = last = numbers[0]
+            for n in numbers[1:] + [-2]:
+                if n == last - 1:
+                    last = n
+                    continue
+                parent.removeRows(last, start - last + 1)
+                start = last = n
+        for folder in sorted(
+            {p.rpartition("/")[0] for p in removed}, key=len, reverse=True
+        ):
+            while folder and self._dirs[folder].rowCount() == 0:
+                item = self._dirs.pop(folder)
+                (item.parent() or root).removeRow(item.row())
+                folder = folder.rpartition("/")[0]
+        self._fresh = []
+        for path in added:
+            self._add_row(path)
+        for path in changed:
+            self._fill_cells(path)
+        if added:
+            header = self.tree.header()
+            self.tree.sortByColumn(
+                header.sortIndicatorSection(), header.sortIndicatorOrder()
+            )
+            for item in self._fresh:
+                self.tree.expand(item.index())
+        self._missing_tags_changed()
+        self._quiet = False
+        self.current = []
+        self._last_selection = QItemSelection()
+        self.editor.set_files([])
+        self._update_summary()
+        self.overview_stale = True
+        self._refresh_overview()
+        self._editor_changed()
+
+    def ignored_files(self) -> None:
+        from scan_dialog import edit_ignored
+
+        edit_ignored(self, self.db)
+
     def scan_for_files(self) -> None:
         # File > Scan for New Files: add, remove and re-read files after the
         # music folder changed.
@@ -654,9 +730,15 @@ class MainWindow(QMainWindow):
             return
         from scan_dialog import scan_library
 
+        before = dict(self.db.tags)
         if scan_library(self, self.db, normalize):
+            tags = self.db.tags
             self.playlist_panel.set_db(self.db)
-            self.load()
+            self._sync_rows(
+                [p for p in before if p not in tags],
+                [p for p in tags if p not in before],
+                [p for p in before if p in tags and tags[p] is not before[p]],
+            )
 
     def _setup_columns(self) -> None:
         # Click a column heading to sort the files of each folder by it (again
@@ -767,41 +849,54 @@ class MainWindow(QMainWindow):
             self.playlist_panel.set_db(self.db)
             self.load()
 
-    def load(self) -> None:
-        # Fill the file tree from the database.
+    def load(self, background: bool = False) -> None:
+        # Fill the file tree from the database.  In the background the rows
+        # are added in slices between events, so that the window shows and
+        # answers at once.
         self._quiet = True
+        self._load_generation += 1
         self.model.removeRows(0, self.model.rowCount())
         self.cells.clear()
-        dirs: dict[str, QStandardItem] = {}
+        self._dirs = {}
+        self._fresh = []
         self._root = self.db.root()
-        for path in self.db.tags:
-            parent = self.model.invisibleRootItem()
-            folder = ""
-            parts = path.split("/")
-            for part in parts[:-1]:
-                folder = f"{folder}/{part}" if folder else part
-                if folder not in dirs:
-                    item = QStandardItem(part)
-                    item.setData(None, PATH_ROLE)
-                    item.setData(
-                        "0" + part.lower(), SORT_ROLE
-                    )  # folders before files
-                    others = [QStandardItem() for _ in TREE_COLUMNS[1:]]
-                    for cell, (_t, key) in zip(others, TREE_COLUMNS[1:]):
-                        cell.setData(
-                            -1.0 if self._numeric_column(key) else "", SORT_ROLE
-                        )
-                    parent.appendRow([item] + others)
-                    dirs[folder] = item
-                parent = dirs[folder]
-            cells = [QStandardItem(parts[-1])] + [
-                QStandardItem() for _ in TREE_COLUMNS[1:]
-            ]
-            cells[0].setData(path, PATH_ROLE)
-            cells[0].setData("1" + parts[-1].lower(), SORT_ROLE)
-            parent.appendRow(cells)
-            self.cells[path] = cells
-            self._fill_cells(path)
+        self._load_paths = list(self.db.tags)
+        self._load_at = 0
+        if not background:
+            for path in self._load_paths:
+                self._add_row(path)
+            self._finish_load()
+            return
+        self._menus_enabled(False)  # the commands need the whole tree
+        generation = self._load_generation
+        QTimer.singleShot(0, lambda: self._load_step(generation))
+
+    def _menus_enabled(self, enabled: bool) -> None:
+        # Quit stays available while the tree is being filled.
+        for top in self.menuBar().actions():
+            for action in top.menu().actions():
+                action.setEnabled(enabled or action.text() == "&Quit")
+
+    def _load_step(self, generation: int) -> None:
+        if generation != self._load_generation:
+            return  # a newer load took over
+        end = time.monotonic() + 0.03
+        paths, at = self._load_paths, self._load_at
+        while at < len(paths) and time.monotonic() < end:
+            self._add_row(paths[at])
+            at += 1
+        self._load_at = at
+        if at < len(paths):
+            self.statusBar().showMessage(
+                f"Loading the files: {at} of {len(paths)}"
+            )
+            QTimer.singleShot(0, lambda: self._load_step(generation))
+            return
+        self.statusBar().clearMessage()
+        self._menus_enabled(True)
+        self._finish_load()
+
+    def _finish_load(self) -> None:
         self._missing_tags_changed()
         self.tree.expandAll()
         self._quiet = False
@@ -812,6 +907,37 @@ class MainWindow(QMainWindow):
         self.overview_stale = True
         self._refresh_overview()
         self._editor_changed()
+
+    def _add_row(self, path: str) -> None:
+        # Put one file, and the folders above it that are missing, in the tree.
+        parent = self.model.invisibleRootItem()
+        folder = ""
+        parts = path.split("/")
+        for part in parts[:-1]:
+            folder = f"{folder}/{part}" if folder else part
+            if folder not in self._dirs:
+                item = QStandardItem(part)
+                item.setData(None, PATH_ROLE)
+                item.setData(
+                    "0" + part.lower(), SORT_ROLE
+                )  # folders before files
+                others = [QStandardItem() for _ in TREE_COLUMNS[1:]]
+                for cell, (_t, key) in zip(others, TREE_COLUMNS[1:]):
+                    cell.setData(
+                        -1.0 if self._numeric_column(key) else "", SORT_ROLE
+                    )
+                parent.appendRow([item] + others)
+                self._dirs[folder] = item
+                self._fresh.append(item)
+            parent = self._dirs[folder]
+        cells = [QStandardItem(parts[-1])] + [
+            QStandardItem() for _ in TREE_COLUMNS[1:]
+        ]
+        cells[0].setData(path, PATH_ROLE)
+        cells[0].setData("1" + parts[-1].lower(), SORT_ROLE)
+        parent.appendRow(cells)
+        self.cells[path] = cells
+        self._fill_cells(path)
 
     def _fill_cells(self, path: str) -> None:
         tags = self.db.tags[path]
@@ -904,7 +1030,7 @@ class MainWindow(QMainWindow):
         # Show every file, or only those lacking a standard tag (and the folders
         # that hold them).
         only = self.missing_only.isChecked()
-        needles = self.file_search.text().lower().split()
+        needles = parse_search(self.file_search.text())
         counted = {k for k, b in self.tag_checks.items() if b.isChecked()}
 
         def lacks(path: str) -> bool:
@@ -921,15 +1047,18 @@ class MainWindow(QMainWindow):
             if needles:
                 hay = self._haystacks.get(path)
                 if hay is None:
-                    hay = self._haystacks[path] = "\n".join(
-                        [path]
+                    hay = self._haystacks[path] = search_fields(
+                        path, self.db.tags[path]
+                    )
+                    hay[""] = "\n".join(
+                        [path.lower()]
                         + [
-                            v
+                            v.lower()
                             for values in self.db.tags[path].values()
                             for v in values
                         ]
-                    ).lower()
-                return all(n in hay for n in needles)
+                    )  # every tag, as before
+                return all(rx.search(hay[field or ""]) for field, rx in needles)
             return True
 
         def visit(parent: QStandardItem) -> bool:
@@ -1735,6 +1864,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             event.ignore()
             return
+        self._load_generation += 1  # stops a load still going on
         self._save_layout()
         self.db.con.close()
         event.accept()
@@ -1766,6 +1896,7 @@ def main() -> int:
     app = QApplication([sys.argv[0]] + qt_args)
     window = MainWindow(TagDb(path))
     window.show()
+    QTimer.singleShot(0, window.tidy_playlists)
     return app.exec()
 
 

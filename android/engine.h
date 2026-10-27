@@ -68,7 +68,8 @@ public slots:
     void setVolume(double volume, double target, bool leveling);
     // gains: dB per band.  automatic: the song's genres choose a preset (see
     // eqpresets.h) and the gains are used for songs that get none.
-    void setEqualizer(bool on, const QVector<double> &gains, bool automatic);
+    void setEqualizer(bool on, const QVector<double> &gains, bool automatic,
+                      const QList<CustomEq> &customs);
 signals:
     void current(qint64 id, const QString &title, const QString &artist,
                  const QString &album);
@@ -177,7 +178,10 @@ private:
     double m_volume = 1.0, m_target = -10.0, m_loudness = 0;
 
     bool m_eqOn = false, m_eqAuto = false, m_eqRouted = false, m_muted = false;
-    const EqPreset *m_autoPreset = nullptr;  // chosen for the current song
+    bool m_autoChosen = false;  // the current song got a preset
+    QString m_autoName;
+    QVector<double> m_autoGains = QVector<double>(5, 0.0);
+    QList<CustomEq> m_customs;  // the user's saved presets
     qint64 m_stalledMs = 0;  // ms the song has been playing at position 0
     qint64 m_sincePush = 0;  // ms since the service was told what plays
     int m_kicks = 0;         // restarts of a stalled song

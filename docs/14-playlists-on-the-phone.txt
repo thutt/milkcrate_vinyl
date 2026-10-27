@@ -44,7 +44,10 @@ Opening and playing
 
   * Tap a static or dynamic playlist: its songs are shown.  The top bar
     shows the name and, for a dynamic playlist, the "N matched" count;
-    the arrow returns to the list.  Tap a song to play from it.
+    the arrow returns to the list.  Tap a song to play from it.  Under
+    each song of a dynamic playlist a line gives the values its rules
+    test, such as "Last played (any copy): never . Rating: not rated",
+    to show why it was chosen (05).
   * Tap a container or sequence: it plays.
   * The play button on a row plays that playlist from its start, or
     from a random song if shuffle is on.
@@ -54,6 +57,12 @@ Opening and playing
 Playing a playlist makes its songs the queue.  Next, Previous and
 shuffle work within it.  Shuffle (the button beside the controls) plays
 in random order without repeating a song until all have played.
+A dynamic playlist always plays in its own order, and so does a
+container or sequence that holds one: while it plays, the shuffle button
+is dimmed and says "in order", and a play from the list starts at its
+first song.  The shuffle choice comes back when anything else plays.  The
+desktop player does the same (the Shuffle button of the Playlists tab and
+Random order are off for such a list).
 
 Tapping the song that is playing does not restart it.
 

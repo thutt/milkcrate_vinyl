@@ -80,6 +80,7 @@ from rating_delegate import RATING_ROLE, STAR_MARGIN, STAR_SLOT, RatingDelegate
 from analysis_actions import detect_bpm, measure_loudness
 from tagdb import MAX_CHOICES, SPLIT_TAGS, TagDb, stat_text
 import containers
+from search import parse_search, search_fields
 from playlists import PlaylistPanel, populate_add_menu
 from tag_editor import TagEditor
 from bulk_values import change_value
@@ -131,37 +132,6 @@ def first_int(text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-SEARCH_FIELDS = {"title", "artist", "album", "genre", "composer", "path"}
-SEARCH_TOKEN = re.compile(r'(?:(\w+):)?(?:"([^"]*)"?|(\S+))')
-
-
-def parse_search(text: str) -> list[tuple[str | None, re.Pattern]]:
-    # Turn the search box text into (field, pattern) tests that must all match.
-    #
-    # A word matches where a word of the text starts with it ("dio" finds Dio
-    # and Dion, not audio or studio);
-    # a leading "=" asks for the whole word ("=dio" finds only Dio); "quoted
-    # words" match as a phrase;
-    # "artist:dio" limits the test to one field (title, artist, album, genre,
-    # composer, path).
-    tests = []
-    for field, quoted, word in SEARCH_TOKEN.findall(text.lower()):
-        word = quoted if quoted else word
-        if (
-            field and field not in SEARCH_FIELDS
-        ):  # not a field name: search for the text as typed
-            word, field = f"{field}:{word}", ""
-        whole = word.startswith("=")
-        word = word.lstrip("=").strip()
-        if not word:
-            continue
-        pattern = (
-            r"(?<![^\W_])" + re.escape(word) + (r"(?![^\W_])" if whole else "")
-        )  # boundaries: not inside a word
-        tests.append((field or None, re.compile(pattern)))
-    return tests
-
-
 class LibraryModel(QAbstractTableModel):
     # One row per file in the database; tag values come from TagDb's in-memory
     # copy.
@@ -191,18 +161,7 @@ class LibraryModel(QAbstractTableModel):
 
     def _index(self, path: str) -> None:
         tags = self.db.tags[path]
-        self.fields[path] = {
-            "title": "\n".join(tags.get("TITLE", [])).lower(),
-            "artist": (
-                "\n".join(
-                    tags.get("ARTIST", []) + tags.get("ALBUMARTIST", [])
-                ).lower()
-            ),
-            "album": "\n".join(tags.get("ALBUM", [])).lower(),
-            "genre": "\n".join(tags.get("GENRE", [])).lower(),
-            "composer": "\n".join(tags.get("COMPOSER", [])).lower(),
-            "path": path.lower(),
-        }
+        self.fields[path] = search_fields(path, tags)
         self.haystack[path] = "\n".join(self.fields[path].values())
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -611,13 +570,42 @@ class ColumnsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    def tidy_playlists(self) -> None:
+        # Dynamic playlists that are short (a longer length, removed entries)
+        # are filled; done after the window is shown.
+        if self.db.top_up_dynamic():
+            self.playlist_panel.refresh()
+
+    def _make_sound(self) -> tuple:
+        # Qt takes about two seconds to find the sound devices, so the output
+        # and the player are made after the window is shown (or at the first
+        # use, if that comes sooner).
+        if self._sound is None:
+            audio = QAudioOutput()
+            audio.setVolume(0.7)
+            player = QMediaPlayer()
+            player.setAudioOutput(audio)
+            player.mediaStatusChanged.connect(self._media_status)
+            player.playbackStateChanged.connect(self._state_changed)
+            player.positionChanged.connect(self._position_changed)
+            player.durationChanged.connect(lambda d: self.seek.setRange(0, d))
+            player.errorOccurred.connect(self._player_error)
+            self._sound = (audio, player)
+            self._apply_volume()
+        return self._sound
+
+    @property
+    def audio(self) -> QAudioOutput:
+        return self._make_sound()[0]
+
+    @property
+    def player(self) -> QMediaPlayer:
+        return self._make_sound()[1]
+
     def __init__(self, db: TagDb):
         super().__init__()
         self.resize(1300, 760)
         self.db = db
-        # dynamic playlists that are short (a longer length, removed entries)
-        # are filled
-        self.db.top_up_dynamic()
         self.root = self._media_root()
         self.current: list[str] = []
         self.playing: str | None = None
@@ -647,6 +635,8 @@ class MainWindow(QMainWindow):
         )
         self.queue_pos = 0  # index in the queue of the track playing
         self.queue_playlist: int | None = None
+        self.shuffle_wanted = False  # the choice; a dynamic playlist overrides
+        self._shuffle_locking = False
         self.schedule: containers.Schedule | None = (
             None  # a container or sequence being played
         )
@@ -725,15 +715,7 @@ class MainWindow(QMainWindow):
             "track",
             -18.0,
         )  # volume leveling: off / track / album, target in LUFS
-        self.audio = QAudioOutput()
-        self.audio.setVolume(0.7)
-        self.player = QMediaPlayer()
-        self.player.setAudioOutput(self.audio)
-        self.player.mediaStatusChanged.connect(self._media_status)
-        self.player.playbackStateChanged.connect(self._state_changed)
-        self.player.positionChanged.connect(self._position_changed)
-        self.player.durationChanged.connect(lambda d: self.seek.setRange(0, d))
-        self.player.errorOccurred.connect(self._player_error)
+        self._sound: tuple | None = None  # (audio output, media player)
         # Some files never start (see _check_stalled_start).
         self.stalled_ms, self.start_kicks = 0, 0
         self.stall_timer = QTimer(self)
@@ -776,7 +758,7 @@ class MainWindow(QMainWindow):
         self.next_button.clicked.connect(self.next)
         self.stop_button.clicked.connect(self.stop)
         self.seek = QSlider(Qt.Orientation.Horizontal)
-        self.seek.sliderMoved.connect(self.player.setPosition)
+        self.seek.sliderMoved.connect(lambda p: self.player.setPosition(p))
         self.seek.sliderReleased.connect(
             lambda: self.player.setPosition(self.seek.value())
         )
@@ -959,6 +941,7 @@ class MainWindow(QMainWindow):
             self.play_path(self.path_at(row), record)
 
     def play_path(self, path: str, record: bool = True) -> None:
+        self._update_shuffle_lock()
         self._finish_track()
         if (
             self.playing is not None
@@ -1031,7 +1014,35 @@ class MainWindow(QMainWindow):
             self.queue_pos = position
         self.play_path(self._sequence()[position])
 
+    def _update_shuffle_lock(self) -> None:
+        # A dynamic playlist plays in its own order: shuffling it makes little
+        # sense, so the button is off and disabled while one plays and the
+        # choice comes back when anything else plays.
+        if self.schedule is not None and self.schedule.section is not None:
+            locked = self.db.holds_dynamic(self.schedule.section.container_id)
+        else:
+            locked = self.queue_playlist is not None and self.db.holds_dynamic(
+                self.queue_playlist
+            )
+        self._shuffle_locking = True
+        try:
+            self.shuffle_button.setEnabled(not locked)
+            self.shuffle_action.setEnabled(not locked)
+            self.shuffle_button.setChecked(self.shuffle_wanted and not locked)
+            self.shuffle_button.setToolTip(
+                "A dynamic playlist plays in order"
+                if locked
+                else "Random order (Ctrl+R): no track repeats until all have"
+                " played"
+            )
+        finally:
+            self._shuffle_locking = False
+
     def _shuffle_toggled(self, on: bool) -> None:
+        if self._shuffle_locking:
+            self.shuffle_action.setChecked(on)
+            return
+        self.shuffle_wanted = on
         self.shuffle_action.setChecked(on)
         self.shuffle_button.setChecked(on)
         self.heard = {self.playing} if self.playing else set()
@@ -1101,11 +1112,12 @@ class MainWindow(QMainWindow):
         paths = [p for _e, p in self.db.playlist_entries(playlist_id)]
         if not paths:
             return
-        if shuffle is not None:
+        if shuffle is not None and not self.db.holds_dynamic(playlist_id):
             self.shuffle_button.setChecked(shuffle)
         self.queue, self.queue_playlist, self.queue_pos = paths, playlist_id, 0
         self.errors_in_a_row = 0
         self.heard, self.history = set(), []
+        self._update_shuffle_lock()
         shuffling = self.shuffle_button.isChecked()
         self._play_at(
             start_row
@@ -1126,7 +1138,7 @@ class MainWindow(QMainWindow):
                 "Nothing to play: it has no containers.", 6000
             )
             return
-        if shuffle is not None:
+        if shuffle is not None and not self.db.holds_dynamic(playlist_id):
             self.shuffle_button.setChecked(shuffle)
         self.schedule = containers.Schedule(sections)
         self.schedule.index = start_row if 0 <= start_row < len(sections) else 0
@@ -1150,6 +1162,7 @@ class MainWindow(QMainWindow):
                 self.section_pending = False
                 self.fade = 1.0
                 self._update_section_label()
+                self._update_shuffle_lock()
                 shuffling = self.shuffle_button.isChecked()
                 self._play_at(random.randrange(len(tracks)) if shuffling else 0)
                 return
@@ -1361,15 +1374,14 @@ class MainWindow(QMainWindow):
         self._skip(f"Cannot play {self.playing}: {message}")
 
     def _state_changed(self, *_) -> None:
-        playing = (
+        state = (
             self.player.playbackState()
-            == QMediaPlayer.PlaybackState.PlayingState
-        )
+            if self._sound
+            else QMediaPlayer.PlaybackState.StoppedState
+        )  # no output yet: nothing plays
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
         self.play_button.setText("⏸" if playing else "▶")
-        if (
-            self.player.playbackState()
-            == QMediaPlayer.PlaybackState.StoppedState
-        ):
+        if state == QMediaPlayer.PlaybackState.StoppedState:
             self._finish_track()
             if self.playing is None:
                 self.now_playing.setText("Nothing playing")
@@ -1704,7 +1716,10 @@ class MainWindow(QMainWindow):
 
     def _apply_volume(self) -> None:
         # The slider sets the volume; volume leveling scales it for the playing
-        # track (the output cannot go above full).
+        # track (the output cannot go above full).  Until the output exists
+        # the volume is applied when it is made.
+        if self._sound is None:
+            return
         gain = (
             self.db.gain_db(self.playing, self.leveling, self.leveling_target)
             if self.playing
@@ -1908,7 +1923,7 @@ class MainWindow(QMainWindow):
         settings.remove("columns")  # the old, count-dependent format
         settings.remove("column_count")
         settings.setValue("volume", self.volume.value())
-        settings.setValue("shuffle", self.shuffle_button.isChecked())
+        settings.setValue("shuffle", self.shuffle_wanted)
         settings.setValue("show_duplicates", self.duplicates_action.isChecked())
         settings.setValue("leveling", self.leveling)
         settings.setValue("leveling_target", self.leveling_target)
@@ -1959,6 +1974,8 @@ def main() -> int:
     app = QApplication([sys.argv[0]] + qt_args)
     window = MainWindow(TagDb(path))
     window.show()
+    QTimer.singleShot(0, window.tidy_playlists)
+    QTimer.singleShot(100, window._make_sound)
     return app.exec()
 
 

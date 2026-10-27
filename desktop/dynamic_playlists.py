@@ -37,6 +37,7 @@
 # except "is not set" / "never" / "is empty" and the negative text operators.
 from __future__ import annotations
 
+import functools
 import random
 import re
 from datetime import datetime, timedelta, timezone
@@ -245,9 +246,46 @@ def parse_prefer(text: str) -> list[str]:
     )
 
 
-def values(db, path: str, field: str):
+@functools.lru_cache(maxsize=None)
+def _spelling(name: str) -> str:
+    from tagdb import normalize
+
+    return normalize(name)
+
+
+def song_key(db, path: str):
+    # What makes two files the same song: the artist and title, spelling and
+    # punctuation aside; a file without both is a song of its own.
+    tags = db.tags[path]
+    title = next((v for v in tags.get("TITLE", []) if v.strip()), "")
+    artist = " ".join(v for v in tags.get("ARTIST", []) if v.strip())
+    return (_spelling(artist), _spelling(title)) if title and artist else path
+
+
+def song_stats(db) -> dict[str, tuple[int, str | None]]:
+    # For each file: the plays and the latest play of its song, counted over
+    # every file with the same artist and title (the copies on other albums
+    # and in other formats), so that a song played from one copy is not chosen
+    # again through another.
+    groups: dict[tuple, list[str]] = {}
+    for path in db.tags:
+        groups.setdefault(song_key(db, path), []).append(path)
+    out: dict[str, tuple[int, str | None]] = {}
+    for members in groups.values():
+        plays = sum(db.stats.get(p, (None, 0, None))[1] or 0 for p in members)
+        last = max(
+            (db.stats.get(p, (None, 0, None))[2] or "" for p in members),
+            default="",
+        )
+        for p in members:
+            out[p] = (plays, last or None)
+    return out
+
+
+def values(db, path: str, field: str, songs=None):
     # A file's value(s) for a field: a list of strings (text), an int or None
-    # (number), an ISO string or None (date).
+    # (number), an ISO string or None (date).  songs (from song_stats) makes
+    # the plays and last played those of the whole song.
     tags = db.tags[path]
     if field == "path":
         return [path]
@@ -259,6 +297,8 @@ def values(db, path: str, field: str):
         )
         return [v for k in keys for v in tags.get(k, []) if v.strip()]
     rating, plays, last = db.stats.get(path, (None, 0, None))
+    if songs is not None:
+        plays, last = songs[path]
     if field == "rating":
         return rating
     if field == "plays":
@@ -318,30 +358,33 @@ def _test(rule: dict, now: datetime):
     }[op]
 
 
-def _compile(db, group: dict, now: datetime):
+def _compile(db, group: dict, now: datetime, songs=None):
     # A function path -> bool for a group of rules (and groups).
     parts = []
     for item in group["rules"]:
         if "field" in item:
             test, field = _test(item, now), item["field"]
             parts.append(
-                lambda p, test=test, field=field: test(values(db, p, field))
+                lambda p, test=test, field=field: test(
+                    values(db, p, field, songs)
+                )
             )
         else:
-            parts.append(_compile(db, item, now))
+            parts.append(_compile(db, item, now, songs))
     combine = all if group["match"] == "all" else any
     return lambda p: combine(part(p) for part in parts)
 
 
-def matches(db, rules: dict, exclude=frozenset()) -> list[str]:
+def matches(db, rules: dict, exclude=frozenset(), songs=None) -> list[str]:
     # Every library file the rules select (never a duplicate, never one of
     # exclude), sorted as the rules say
     # (random for "random").
     error = validate(rules)
     if error:
         raise ValueError(error)
+    songs = songs if songs is not None else song_stats(db)
     selects = (
-        _compile(db, rules, datetime.now(timezone.utc))
+        _compile(db, rules, datetime.now(timezone.utc), songs)
         if rules["rules"]
         else (lambda _p: True)
     )
@@ -355,7 +398,7 @@ def matches(db, rules: dict, exclude=frozenset()) -> list[str]:
         random.shuffle(chosen)
     else:
         chosen.sort(
-            key=lambda p: _sort_key(db, p, sort["field"]),
+            key=lambda p: _sort_key(db, p, sort["field"], songs),
             reverse=bool(sort.get("descending")),
         )
     prefer = rules.get("prefer") or []
@@ -365,7 +408,7 @@ def matches(db, rules: dict, exclude=frozenset()) -> list[str]:
     return chosen
 
 
-def _sort_key(db, path: str, field: str):
+def _sort_key(db, path: str, field: str, songs=None):
     # The sort field first (not set sorts lowest), then artist / album / track
     # so that ties come out in album order.
     def text(f: str) -> str:
@@ -374,9 +417,9 @@ def _sort_key(db, path: str, field: str):
     if field in ("artist", "album", "title"):
         primary = text(field)
     elif field == "last_played":
-        primary = values(db, path, field) or ""
+        primary = values(db, path, field, songs) or ""
     else:
-        v = values(db, path, field)
+        v = values(db, path, field, songs)
         primary = -1 if v is None else v
     return (
         primary,
@@ -385,3 +428,50 @@ def _sort_key(db, path: str, field: str):
         values(db, path, "track") or 0,
         text("title"),
     )
+
+
+def rule_fields(rules: dict) -> list[str]:
+    # The fields the rules test, and the one they sort by, in order of
+    # appearance; the columns that explain why a track was chosen.
+    found: list[str] = []
+
+    def walk(group: dict) -> None:
+        for item in group.get("rules", []):
+            if "field" in item:
+                found.append(item["field"])
+            else:
+                walk(item)
+
+    walk(rules)
+    sort = rules.get("sort", {}).get("field", "random")
+    if sort != "random":
+        found.append(sort)
+    return list(dict.fromkeys(found))
+
+
+def field_text(db, path: str, field: str, songs, now: datetime) -> str:
+    # A field of a file as text, for a column.
+    value = values(db, path, field, songs)
+    if field == "rating":
+        return "not rated" if value is None else "\u2605" * value + "\u2606" * (
+            5 - value
+        )
+    if field == "last_played":
+        if not value:
+            return "never"
+        try:
+            then = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            return value
+        days = (now - then).days
+        when = (
+            "today"
+            if days < 1
+            else f"{days} day{'s' if days != 1 else ''} ago"
+        )
+        return f"{then.astimezone().strftime('%Y-%m-%d')} ({when})"
+    if isinstance(value, list):
+        return "; ".join(value)
+    return "" if value is None else str(value)

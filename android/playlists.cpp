@@ -5,9 +5,11 @@
 // by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
 // see the file LICENSE for the license text.
 #include "playlists.h"
+#include "dynamic.h"
 
 #include <QSqlDatabase>
 #include <algorithm>
+#include <functional>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
@@ -199,7 +201,18 @@ QList<PlaylistInfo> loadPlaylists(const QString &dbPath, QString *error) {
         r.members = q.value(7).toInt();
         rows.append(r);
     }
+    std::function<bool(qint64)> holds = [&](qint64 id) {
+        for (const Row &o : rows) {
+            if (o.info.id != id) continue;
+            if (o.info.kind == "dynamic") return true;
+            if (o.info.kind == "playlist") return false;
+            for (qint64 m : membersOf(db, id))
+                if (holds(m)) return true;
+        }
+        return false;
+    };
     for (Row &r : rows) {
+        r.info.holdsDynamic = holds(r.info.id);
         QStringList names;
         for (qint64 m : membersOf(db, r.info.id))
             for (const Row &o : rows)
@@ -283,6 +296,7 @@ QVariant EntryModel::data(const QModelIndex &index, int role) const {
         case ArtistRole: return t.artist;
         case AlbumRole: return t.album;
         case RatingRole: return t.rating;
+        case DetailRole: return t.detail;
     }
     return {};
 }
@@ -292,7 +306,8 @@ QHash<int, QByteArray> EntryModel::roleNames() const {
             {TitleRole, "title"},
             {ArtistRole, "artist"},
             {AlbumRole, "album"},
-            {RatingRole, "rating"}};
+            {RatingRole, "rating"},
+            {DetailRole, "detail"}};
 }
 
 void EntryModel::setRating(qint64 id, int rating) {
@@ -303,7 +318,26 @@ void EntryModel::setRating(qint64 id, int rating) {
     }
 }
 
+void EntryModel::setDetails(const QHash<qint64, QString> &why) {
+    for (QueueItem &t : m_items) t.detail = why.value(t.id);
+    if (!m_items.isEmpty())
+        emit dataChanged(index(0), index(m_items.size() - 1), {DetailRole});
+}
+
 void EntryModel::setItems(const QVector<QueueItem> &items) {
+    bool same = items.size() == m_items.size();
+    for (int i = 0; same && i < items.size(); ++i)
+        same = items[i].id == m_items[i].id;
+    if (same) {  // the same songs: update the rows, so the list stays put
+        for (int i = 0; i < items.size(); ++i) {
+            const QString detail = m_items[i].detail;
+            m_items[i] = items[i];
+            m_items[i].detail = detail;
+        }
+        if (!m_items.isEmpty())
+            emit dataChanged(index(0), index(m_items.size() - 1));
+        return;
+    }
     beginResetModel();
     m_items = items;
     endResetModel();

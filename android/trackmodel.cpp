@@ -6,6 +6,8 @@
 // see the file LICENSE for the license text.
 #include "trackmodel.h"
 
+#include <QDateTime>
+#include <QRegularExpression>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -40,6 +42,31 @@ QString searchKey(const QString &text) {
     return out.trimmed();
 }
 
+// "Plays: 3  ·  Last played: 2 days ago"; empty until the stats are read.
+QString TrackModel::statText(QHash<qint64, SongStat>::const_iterator it) const {
+    if (it == m_stats.constEnd()) return {};
+    QString when = "never";
+    const QDateTime then =
+        QDateTime::fromString(it->last, "yyyy-MM-ddTHH:mm:ssZ");
+    if (then.isValid()) {
+        const qint64 days =
+            QDateTime(then.date(), then.time(), Qt::UTC)
+                .daysTo(QDateTime::currentDateTimeUtc());
+        when = days < 1 ? QString("today")
+                        : QString("%1 day%2 ago").arg(days).arg(
+                              days == 1 ? "" : "s");
+    }
+    return QString("Plays: %1  \u00b7  Last played: %2")
+        .arg(it->plays)
+        .arg(when);
+}
+
+void TrackModel::setStats(const QHash<qint64, SongStat> &stats) {
+    m_stats = stats;
+    if (!m_view.isEmpty())
+        emit dataChanged(index(0), index(m_view.size() - 1), {DetailRole});
+}
+
 QVariant TrackModel::data(const QModelIndex &index, int role) const {
     const Track *t = index.isValid() ? atRow(index.row()) : nullptr;
     if (!t) return {};
@@ -49,6 +76,7 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const {
         case ArtistRole: return t->artist;
         case AlbumRole: return t->album;
         case RatingRole: return t->rating;
+        case DetailRole: return statText(m_stats.constFind(t->id));
     }
     return {};
 }
@@ -58,7 +86,8 @@ QHash<int, QByteArray> TrackModel::roleNames() const {
             {TitleRole, "title"},
             {ArtistRole, "artist"},
             {AlbumRole, "album"},
-            {RatingRole, "rating"}};
+            {RatingRole, "rating"},
+            {DetailRole, "detail"}};
 }
 
 bool TrackModel::load(const QString &dbPath, QString *error) {
@@ -134,6 +163,11 @@ bool TrackModel::load(const QString &dbPath, QString *error) {
         }
         t.key =
             searchKey(t.title + ' ' + t.artist + ' ' + t.album + ' ' + t.genre);
+        t.keyTitle = searchKey(t.title);
+        t.keyArtist = searchKey(t.artist);
+        t.keyAlbum = searchKey(t.album);
+        t.keyGenre = searchKey(t.genre);
+        t.keyPath = searchKey(t.path);
         QString num = QString("%1").arg(t.number, 4, 10, QChar('0'));
         t.sortArtist = t.artist.toLower() + '\x01' + t.album.toLower() +
                        '\x01' + num + '\x01' + t.title.toLower();
@@ -183,11 +217,50 @@ void TrackModel::setRating(qint64 id, int rating) {
     if (row >= 0) emit dataChanged(index(row), index(row), {RatingRole});
 }
 
+// "genre:rock" tests one field; the fields are numbered by their position in
+// kFields (1 = title).  A word starting with "=" must match a whole word, and
+// "quoted words" match as a phrase.  Text before a colon that is not a field
+// name is searched for as typed.
+static const QStringList kFields = {"", "title", "artist", "album", "genre",
+                                    "path"};
+
+QVector<TrackModel::Term> TrackModel::parseQuery(const QString &text) {
+    static const QRegularExpression token(
+        R"re((?:(\w+):)?(?:"([^"]*)"?|(\S+)))re");
+    QVector<Term> terms;
+    auto it = token.globalMatch(text.toLower());
+    while (it.hasNext()) {
+        QRegularExpressionMatch m = it.next();
+        QString field = m.captured(1);
+        QString word = m.captured(2).isEmpty() ? m.captured(3) : m.captured(2);
+        int number = field.isEmpty() ? 0 : kFields.indexOf(field);
+        if (number < 1 && !field.isEmpty()) {
+            word = field + ':' + word;
+            number = 0;
+        }
+        bool whole = word.startsWith('=');
+        QString key = searchKey(whole ? word.mid(1) : word);
+        if (!key.isEmpty()) terms.append({number, key, whole});
+    }
+    return terms;
+}
+
+const QString &TrackModel::fieldKey(const Track &t, int field) {
+    switch (field) {
+    case 1: return t.keyTitle;
+    case 2: return t.keyArtist;
+    case 3: return t.keyAlbum;
+    case 4: return t.keyGenre;
+    case 5: return t.keyPath;
+    }
+    return t.key;
+}
+
 void TrackModel::setQuery(const QString &text) {
-    QStringList words = searchKey(text).split(' ', Qt::SkipEmptyParts);
-    if (words == m_words) return;
+    QVector<Term> terms = parseQuery(text);
+    if (terms == m_terms) return;
     beginResetModel();
-    m_words = words;
+    m_terms = terms;
     rebuild();
     endResetModel();
     emit countChanged();
@@ -201,15 +274,15 @@ void TrackModel::setSort(const QString &key) {
     endResetModel();
 }
 
-// Every search word has to start a word of the track's title, artist, album or
-// genre.
+// Every search term has to start a word of the track's title, artist, album or
+// genre (or of the one field it names).
 void TrackModel::rebuild() {
     m_view.clear();
     for (int i = 0; i < m_all.size(); ++i) {
-        const QString padded = ' ' + m_all[i].key;
         bool all = true;
-        for (const QString &w : m_words)
-            if (!padded.contains(' ' + w)) {
+        for (const Term &w : m_terms)
+            if (!(' ' + fieldKey(m_all[i], w.field) + ' ')
+                     .contains(' ' + w.text + (w.whole ? " " : ""))) {
                 all = false;
                 break;
             }

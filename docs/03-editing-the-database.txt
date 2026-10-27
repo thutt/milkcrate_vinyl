@@ -69,8 +69,10 @@ it, see 02.
 Finding files
 -------------
 
-  * The search box matches files whose path or tag values contain
-    every word typed.
+  * The search box matches files whose path or tag values have a word
+    starting with every word typed.  The player's search language
+    applies (10): "=whole", "a phrase" and "genre:classical" to limit a
+    word to the title, artist, album, genre, composer or path.
   * "Only files missing standard tags" lists files that lack Title,
     Artist, Album, Genre, Tracknumber or Date (the checked ones).  A
     tag with only blank values counts as missing.
@@ -236,7 +238,31 @@ Adding and removing files
   * Right-click files > Remove N files from library... deletes them,
     with their tags, plays, ratings and playlist entries, from the
     database.  The files on disk stay, and a later scan lists them as
-    new if they are still in the music folder.
+    new if they are still in the music folder, unless "Yes, and ignore
+    them in scans" is clicked instead of Yes (see below).
+  * The New tab of the scan dialog has two columns.  The left one lists
+    the new files found, with no tick boxes.  Select files (Shift or
+    Ctrl-click, Ctrl+A; the filter box above the list narrows it to files
+    whose path, title, artist or album contain the words typed) and click
+    one of the buttons between the columns to move them to the right:
+
+      Add to database     the files are added with their tags
+      Ignore in future    scans no longer list the files
+      Delete from disk    the files, and the folders that become empty,
+                          are deleted (a confirmation lists them first;
+                          this cannot be undone)
+
+    "Put back" moves selected files on the right back to the left.
+    Files left on the left are not touched and are listed again by the
+    next scan.  Nothing happens until Apply is clicked; Cancel discards
+    every choice.  The Missing and Changed tabs keep their tick boxes
+    (Shift-click a tick box to tick or untick all of them).
+  * The Ignored tab lists the ignored files.  Select files and click
+    "Stop ignoring selected files" to have scans list them again (a
+    file that is on disk comes back to the left column at once).
+    File > Ignored Scan Files... shows the same list outside a scan.
+    The list is stored in the database (the meta table).  Ignoring
+    never affects files that are already in the database.
   * The same dialog has a checkbox, "Also delete the files from the disk,
     and the folders that become empty".  Checked, the files are deleted
     from the music folder (they cannot be recovered; the database can,

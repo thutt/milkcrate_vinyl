@@ -75,17 +75,31 @@ def copy_files(
     jobs: int,
     log=print,
     cancelled=lambda: False,
+    progress=lambda *_: None,
 ) -> int:
     # Copy [(source, relative path, size)] with push_one(source, rel) (raises on
     # failure; tried three times).  Stops starting files when cancelled() is
     # true, and after LOST failures in a row (the phone went away); a stopped
-    # copy returns 1.
+    # copy returns 1.  progress(files done, files, bytes done, bytes, file being
+    # copied, MB/s, minutes left) is called now and then, from several threads.
     skipped = 0
     lost = [0, False]  # failures in a row, gave up
     done = [0, 0]  # files, bytes
     failures: list[tuple[str, str]] = []
     lock = threading.Lock()
     start = time.time()
+    total_bytes = sum(size for _s, _r, size in todo)
+    shown = [0.0]  # when progress was last called
+
+    def report(current: str, force: bool = False) -> None:
+        now = time.time()
+        if not force and now - shown[0] < 0.2:
+            return
+        shown[0] = now
+        rate = done[1] / max(now - start, 1) / 1e6
+        left = (total_bytes - done[1]) / max(rate * 1e6, 1) / 60
+        progress(done[0], len(todo), done[1], total_bytes, current, rate, left)
+
     folder = [None, -1]  # the folder of the furthest file started, and its
     # number: the files go in path order, but threads may start out of order
 
@@ -97,6 +111,7 @@ def copy_files(
                 log(f"folder: {where or '.'}")
             if number > folder[1]:
                 folder[0], folder[1] = where, number
+            report(rel)
         err = ""
         for attempt in (1, 2, 3):
             if cancelled() or lost[1]:
@@ -131,6 +146,7 @@ def copy_files(
                 else:
                     done[0] += 1
                     done[1] += size
+                report(rel, n == len(todo))
                 if n % 100 == 0 or n == len(todo):
                     rate = done[1] / max(time.time() - start, 1) / 1e6
                     left = sum(s for _f, _r, s in todo) - done[1]

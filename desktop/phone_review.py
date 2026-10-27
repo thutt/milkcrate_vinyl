@@ -10,8 +10,8 @@
 # driving can be rated later.
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import QEvent, QRect, Qt
+from PyQt6.QtGui import QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -49,23 +50,45 @@ def _was(rating, plays) -> str:
 
 
 class ReviewDelegate(RatingDelegate):
-    # The stars, and the words "not rated" where there are none.
+    # A song that is not rated shows five faint stars; a click on one of them
+    # gives that many stars, and a click anywhere else in the cell changes
+    # nothing (the player's cell rates zero stars on any click).
     def paint(self, painter, option, index) -> None:
         super().paint(painter, option, index)
         rating = index.data(RATING_ROLE)
         if rating is not None and rating >= 0:
             return
         painter.save()
-        font = painter.font()
-        font.setItalic(True)
-        painter.setFont(font)
-        painter.setOpacity(0.6)
-        painter.drawText(
-            option.rect.adjusted(STAR_MARGIN, 0, 0, 0),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            "not rated",
-        )
+        painter.setOpacity(0.35)
+        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
+        for i in range(5):
+            slot = QRect(
+                option.rect.left() + STAR_MARGIN + i * STAR_SLOT,
+                option.rect.top(),
+                STAR_SLOT,
+                option.rect.height(),
+            )
+            painter.drawText(slot, Qt.AlignmentFlag.AlignCenter, "\u2606")
         painter.restore()
+
+    def editorEvent(self, event, model, option, index) -> bool:
+        rating = index.data(RATING_ROLE)
+        if (
+            (rating is None or rating < 0)
+            and hasattr(event, "button")
+            and event.button() == Qt.MouseButton.LeftButton
+            and event.type()
+            in (
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseButtonDblClick,
+            )
+        ):
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                x = event.position().x() - option.rect.left() - STAR_MARGIN
+                if 0 <= x < 5 * STAR_SLOT:
+                    self.rate(index, int(x // STAR_SLOT) + 1)
+            return True
+        return super().editorEvent(event, model, option, index)
 
 
 class PhoneReview(QDialog):
@@ -80,6 +103,7 @@ class PhoneReview(QDialog):
             before.setdefault(path, (rating, plays))  # the first round's
         self.paths = [p for p in before if p in db.tags]
         self.before = before
+        self.pending: dict[str, int | None] = {}  # ratings given, not stored
         layout = QVBoxLayout(self)
         self.summary = QLabel()
         layout.addWidget(self.summary)
@@ -115,24 +139,29 @@ class PhoneReview(QDialog):
         layout.addWidget(
             QLabel(
                 "Click the stars, or select songs and press 0 to 5 "
-                "(Delete: not rated).  Changes are stored at once and "
-                "go to the phone at the next sync."
+                "(Delete: not rated).  Apply stores the ratings, which go "
+                "to the phone at the next sync; Cancel discards them."
             )
         )
         row = QHBoxLayout()
         row.addStretch()
-        close = QPushButton("Close")
-        close.clicked.connect(self.accept)
-        row.addWidget(close)
+        apply = QPushButton("Apply")
+        apply.setDefault(True)
+        apply.setToolTip("Store the ratings given here and close")
+        apply.clicked.connect(self.accept)
+        cancel = QPushButton("Cancel")
+        cancel.setToolTip("Close without storing the ratings given here")
+        cancel.clicked.connect(self.reject)
+        row.addWidget(apply)
+        row.addWidget(cancel)
         layout.addLayout(row)
         self.table.setSortingEnabled(False)
         for r, path in enumerate(self.paths):
             self._fill(r, path)
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 260)
-        words = self.table.fontMetrics().horizontalAdvance("not rated")
         self.table.setColumnWidth(
-            RATING_COLUMN, 2 * STAR_MARGIN + max(5 * STAR_SLOT, words) + 12
+            RATING_COLUMN, 2 * STAR_MARGIN + 5 * STAR_SLOT + 12
         )
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(
@@ -168,6 +197,7 @@ class PhoneReview(QDialog):
                 value = -1 if rating is None else rating
                 item.setData(RATING_ROLE, value)
                 item.setData(Qt.ItemDataRole.DisplayRole, value)
+                item.setToolTip("Click a star to rate")
             self.table.setItem(r, c, item)
 
     def _rate(self, index, rating) -> None:
@@ -182,11 +212,17 @@ class PhoneReview(QDialog):
         if paths:
             self._set(sorted(paths), rating)
 
+    def _rating_of(self, path: str):
+        if path in self.pending:
+            return self.pending[path]
+        return self.db.stats.get(path, (None,))[0]
+
     def _set(self, paths: list[str], rating) -> None:
-        self.db.set_ratings(paths, rating)
+        # Only the list changes; Apply stores the ratings.
         sorting = self.table.isSortingEnabled()
         self.table.setSortingEnabled(False)
         for path in paths:
+            self.pending[path] = rating
             r = self._row_of(path)
             if r >= 0:
                 value = -1 if rating is None else rating
@@ -195,8 +231,28 @@ class PhoneReview(QDialog):
                 item.setData(Qt.ItemDataRole.DisplayRole, value)
         self.table.setSortingEnabled(sorting)
         self.table.viewport().update()
-        self.changed(paths)
-        self._filter(refresh_only=not self.unrated.isChecked())
+
+    def accept(self) -> None:
+        by_rating: dict = {}
+        for path, rating in self.pending.items():
+            by_rating.setdefault(rating, []).append(path)
+        for rating, paths in by_rating.items():
+            self.db.set_ratings(paths, rating)
+        if self.pending:
+            self.changed(list(self.pending))
+        super().accept()
+
+    def reject(self) -> None:
+        if self.pending and (
+            QMessageBox.question(
+                self,
+                "Cancel",
+                f"Discard the ratings given to {len(self.pending)} song(s)?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        super().reject()
 
     def _menu(self, pos) -> None:
         menu = QMenu(self)
@@ -209,19 +265,18 @@ class PhoneReview(QDialog):
             )
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
-    def _filter(self, *_, refresh_only: bool = False) -> None:
-        unrated = 0
+    def _filter(self, *_) -> None:
+        unrated = shown = 0
         for r in range(self.table.rowCount()):
             path = self.table.item(r, 0).data(PATH_ROLE)
-            is_unrated = self.db.stats.get(path, (None,))[0] is None
+            is_unrated = self._rating_of(path) is None
             unrated += is_unrated
-            if not refresh_only:
-                self.table.setRowHidden(
-                    r, self.unrated.isChecked() and not is_unrated
-                )
+            hide = self.unrated.isChecked() and not is_unrated
+            self.table.setRowHidden(r, hide)
+            shown += not hide
         self.summary.setText(
             f"{len(self.paths)} song(s) took plays or a rating from the phone;"
-            f" {unrated} not rated."
+            f" {unrated} not rated.  Showing {shown}."
         )
 
 

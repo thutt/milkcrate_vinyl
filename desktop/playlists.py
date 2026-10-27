@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from datetime import datetime, timezone
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -45,6 +46,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QSplitter,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -688,6 +691,7 @@ class PlaylistPanel(QWidget):
         self.db = db
         self.can_play = can_play
         self._loading = False
+        self._matched = 0  # the dynamic playlist shown: songs its rules select
 
         self.lists = QListWidget()
         self.lists.currentItemChanged.connect(lambda *_: self._load_entries())
@@ -823,11 +827,25 @@ class PlaylistPanel(QWidget):
         for b in (self.up_button, self.down_button, self.remove_button):
             entry_buttons.addWidget(b)
         self.entries_label = QLabel()
+        self.details = QTreeWidget()  # a dynamic playlist: why each track
+        self.details.setRootIsDecorated(False)
+        self.details.setUniformRowHeights(True)
+        self.details.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.details.itemSelectionChanged.connect(self._details_selected)
+        self.details.itemDoubleClicked.connect(
+            lambda item: self._play(
+                self.details.indexOfTopLevelItem(item), None
+            )
+        )
+        self.details.setVisible(False)
         bottom = QWidget()
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.addWidget(self.entries_label)
         bottom_layout.addWidget(self.entries, 1)
+        bottom_layout.addWidget(self.details, 1)
         bottom_layout.addLayout(entry_buttons)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -929,6 +947,13 @@ class PlaylistPanel(QWidget):
                 self.entries.addItem(item)
         self._loading = False
         dynamic = kind == "dynamic"
+        songs = dyn.song_stats(self.db) if dynamic else None
+        self._matched = (  # counted here only: selecting rows asks for it
+            len(dyn.matches(self.db, self.db.get_rules(pid), songs=songs))
+            if dynamic
+            else 0
+        )
+        self._fill_details(pid if dynamic else None, songs)
         composite = kind in ("container", "sequence")
         if pid is None:
             label = "Select or create a playlist"
@@ -945,9 +970,9 @@ class PlaylistPanel(QWidget):
                 " one after another; Edit... changes it"
             )
         elif dynamic:
-            total = match_count(self.db, self.db.get_rules(pid))
             label = (
-                f"{self.entries.count()} tracks \u2014 dynamic, {total} matched"
+                f"{self.entries.count()} tracks \u2014 dynamic,"
+                f" {self._matched} matched"
             )
         else:
             label = (
@@ -962,6 +987,54 @@ class PlaylistPanel(QWidget):
         )
         self._update_buttons()
 
+    def _fill_details(self, pid: int | None, songs) -> None:
+        # A dynamic playlist shows the values its rules test, so that it is
+        # clear why each track was chosen; other lists show titles only.
+        self.details.setVisible(pid is not None)
+        self.entries.setVisible(pid is None)
+        self.details.clear()
+        if pid is None:
+            return
+        rules = self.db.get_rules(pid)
+        fields = ["title", "artist", "album"] + [
+            f
+            for f in dyn.rule_fields(rules)
+            if f not in ("title", "artist", "album")
+        ]
+        now = datetime.now(timezone.utc)
+        headers = []
+        for f in fields:
+            name = dyn.FIELDS[f].split(" (")[0]
+            headers.append(
+                name + " (any copy)" if f in ("plays", "last_played") else name
+            )
+        self.details.setColumnCount(len(fields))
+        self.details.setHeaderLabels(headers)
+        for entry, path in self.db.playlist_entries(pid):
+            item = QTreeWidgetItem(
+                [dyn.field_text(self.db, path, f, songs, now) for f in fields]
+            )
+            item.setToolTip(0, path)
+            self.details.addTopLevelItem(item)
+        for c in range(len(fields)):
+            self.details.resizeColumnToContents(c)
+            self.details.setColumnWidth(
+                c, min(self.details.columnWidth(c), 320)
+            )
+
+    def _details_selected(self) -> None:
+        # keep the list's selection (the Play button reads it) in step
+        rows = {
+            self.details.indexOfTopLevelItem(i)
+            for i in self.details.selectedItems()
+        }
+        self.entries.blockSignals(True)
+        self.entries.clearSelection()
+        for r in rows:
+            self.entries.item(r).setSelected(True)
+        self.entries.blockSignals(False)
+        self._update_buttons()
+
     def _update_buttons(self) -> None:
         pid = self.current_id()
         has_list = pid is not None
@@ -973,7 +1046,7 @@ class PlaylistPanel(QWidget):
         self.edit_button.setEnabled(kind in ("container", "sequence"))
         self.edit_rules_button.setEnabled(dynamic)
         rules = self.db.get_rules(pid) if dynamic else None
-        total = match_count(self.db, rules) if rules else 0
+        total = self._matched if rules else 0
         self.rules_view.setPlainText(
             (f"{total} matched\n\n" + dyn.describe(rules)) if rules else ""
         )
@@ -986,7 +1059,16 @@ class PlaylistPanel(QWidget):
         self.remove_button.setEnabled(selected)
         if self.can_play:
             self.play_button.setEnabled(self.entries.count() > 0)
-            self.shuffle_button.setEnabled(self.entries.count() > 0)
+            shuffles = self.entries.count() > 0 and not (
+                has_list and self.db.holds_dynamic(pid)
+            )
+            self.shuffle_button.setEnabled(shuffles)
+            self.shuffle_button.setToolTip(
+                "Play the playlist in random order; no track repeats until"
+                " all have played"
+                if not has_list or not self.db.holds_dynamic(pid)
+                else "A dynamic playlist plays in order"
+            )
 
     # -- playlists -----------------------------------------------------------
 

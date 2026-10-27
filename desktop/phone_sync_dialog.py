@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
 )
@@ -50,6 +51,7 @@ LIVE: set = set()  # stopped jobs still ending
 class Job(QThread):
     # Runs fn(log) in a thread; log(text) adds a line to the dialog.
     line = pyqtSignal(str)
+    progress = pyqtSignal(int, int, float, float, str, float, float)
     succeeded = pyqtSignal(object)
     failed = pyqtSignal(object)
 
@@ -112,6 +114,12 @@ class SyncDialog(QDialog):
         layout.addWidget(self.music)
         self.log = QPlainTextEdit(readOnly=True)
         layout.addWidget(self.log, 1)
+        self.bar = QProgressBar()
+        self.bar.setVisible(False)
+        layout.addWidget(self.bar)
+        self.status = QLabel()  # what is happening now
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
         buttons = QHBoxLayout()
         buttons.addStretch()
         self.go = QPushButton("Sync")
@@ -188,6 +196,25 @@ class SyncDialog(QDialog):
 
     def say(self, text: str) -> None:
         self.log.appendPlainText(text)
+        if not self.bar.isVisible():  # while copying, the progress is shown
+            self.status.setText(text)
+
+    def show_progress(
+        self, done, total, done_bytes, total_bytes, current, rate, minutes
+    ) -> None:
+        self.bar.setVisible(True)
+        self.bar.setMaximum(max(int(total_bytes / 1e6), 1))
+        self.bar.setValue(int(done_bytes / 1e6))
+        self.bar.setFormat(f"{done} of {total} files")
+        left = (
+            "less than a minute"
+            if minutes < 1
+            else f"about {minutes:.0f} min"
+        )
+        self.status.setText(
+            f"Copying {current}\n{done_bytes / 1e9:.2f} of"
+            f" {total_bytes / 1e9:.2f} GB, {rate:.0f} MB/s, {left} left"
+        )
 
     def busy(self, on: bool) -> None:
         self.go.setEnabled(not on)
@@ -198,6 +225,7 @@ class SyncDialog(QDialog):
     def run_job(self, fn, then, on_fail=None) -> None:
         self.job = Job(fn, self)
         self.job.line.connect(self.say)
+        self.job.progress.connect(self.show_progress)
         failed = on_fail or self.fail
         self.job.succeeded.connect(lambda r: self.next_step(then, r))
         self.job.failed.connect(lambda e: self.next_step(failed, e))
@@ -212,6 +240,7 @@ class SyncDialog(QDialog):
             shutil.rmtree(self.tmp, ignore_errors=True)
             self.tmp = ""
         self.busy(False)
+        self.bar.setVisible(False)
 
     def completed(self, ok: bool) -> None:
         # Everything is done.  The dialog closes (the program's status bar says
@@ -339,7 +368,10 @@ class SyncDialog(QDialog):
                 .execute("SELECT value FROM meta WHERE key = 'root'")
                 .fetchone()[0]
             )
-            log("Comparing the music with the card...")
+            log(
+                "Listing the library and the files on the card (a minute or"
+                " more for a large library)..."
+            )
             files, skipped = phone_files.manifest(db_path, root)
             have = {k.lower(): v for k, v in link.files().items()}
             todo = [f for f in files if have.get(f[1].lower()) != f[2]]
@@ -355,6 +387,7 @@ class SyncDialog(QDialog):
                     2,
                     log,
                     self.stop.is_set,
+                    self.job.progress.emit,
                 )
                 if todo
                 else 0

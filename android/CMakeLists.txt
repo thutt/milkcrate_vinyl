@@ -22,6 +22,13 @@ qt_add_executable(musicplayer
     main.cpp equalizer.cpp equalizer.h eqpresets.cpp eqpresets.h trackmodel.cpp trackmodel.h engine.cpp engine.h dblock.h
     dynamic.cpp dynamic.h sync.cpp sync.h playlists.cpp playlists.h
     player.cpp player.h)
+add_custom_target(buildstamp ALL
+    COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/buildstamp.h
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/stamp.cmake
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/buildstamp.h)
+add_dependencies(musicplayer buildstamp)
+target_include_directories(musicplayer PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 qt_add_qml_module(musicplayer URI MusicPlayer VERSION 1.0 QML_FILES Main.qml)
 target_link_libraries(musicplayer PRIVATE
     Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Sql Qt6::Network)

@@ -57,6 +57,9 @@ class Scan:
         default_factory=list
     )  # in both, but size or modification time differ
     unchanged: int = 0
+    ignored: list[str] = field(
+        default_factory=list
+    )  # new files skipped because they are on the ignore list
 
 
 def scan(db, root: str, progress=None) -> Scan:
@@ -70,6 +73,7 @@ def scan(db, root: str, progress=None) -> Scan:
         )
     }
     result = Scan(root)
+    skip = set(db.scan_ignored())
     seen: set[str] = set()
     for n, full in enumerate(tagio.find_media(root), 1):
         if progress and n % 200 == 0 and progress(n) is False:
@@ -77,7 +81,10 @@ def scan(db, root: str, progress=None) -> Scan:
         rel = os.path.relpath(full, root).replace(os.sep, "/")
         seen.add(rel)
         if rel not in known:
-            result.new.append(rel)
+            if rel in skip:
+                result.ignored.append(rel)
+            else:
+                result.new.append(rel)
             continue
         size, mtime = known[rel]
         try:

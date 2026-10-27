@@ -15,7 +15,15 @@ ApplicationWindow {
     width: 400; height: 800
     title: "Milkcrate Vinyl"
     Material.theme: Material.System
-    Material.accent: Material.Pink
+    // Colours that people with red-green or blue-yellow colour blindness can
+    // tell apart from the text and the background (the Okabe-Ito blue and
+    // orange), in a light and a dark form; each has at least 4.5:1 contrast
+    // with the background.  The stars also differ in shape, not only colour.
+    readonly property bool dark: Qt.styleHints.colorScheme === Qt.Dark
+    readonly property color accentInk: dark ? "black" : "white"
+    readonly property color starColor: dark ? "#E69F00" : "#A15A00"
+    readonly property color errorColor: dark ? "#FFA366" : "#B34700"
+    Material.accent: dark ? "#56B4E9" : "#0072B2"
     // the phone's Back: from a playlist to the list of playlists, from there to
     // the songs
     onClosing: function(close) {
@@ -75,8 +83,10 @@ ApplicationWindow {
     component ShuffleButton: Item {
         id: sh
         property bool on: false
+        property bool available: true  // a dynamic playlist plays in order
         signal toggled(bool value)
         implicitWidth: 76; implicitHeight: 68
+        opacity: available ? 1 : 0.4
         Rectangle {
             id: disc
             width: 44; height: 44; radius: 22
@@ -88,7 +98,7 @@ ApplicationWindow {
                 id: glyph
                 width: 24; height: 24
                 anchors.centerIn: parent
-                property color ink: sh.on ? "white"
+                property color ink: sh.on ? window.accentInk
                                           : window.foregroundAlpha(0.75)
                 onInkChanged: requestPaint()
                 onPaint: {
@@ -130,13 +140,16 @@ ApplicationWindow {
         Label {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: disc.bottom; anchors.topMargin: 3
-            text: sh.on ? "SHUFFLE ON" : "shuffle off"
+            text: sh.on ? "SHUFFLE ON" : sh.available ? "shuffle off" : "in order"
             font.pixelSize: 11
             font.bold: sh.on
             font.letterSpacing: sh.on ? 0.8 : 0
             color: sh.on ? Material.accent : window.foregroundAlpha(0.6)
         }
-        MouseArea { anchors.fill: parent; onClicked: sh.toggled(!sh.on) }
+        MouseArea {
+            anchors.fill: parent; enabled: sh.available
+            onClicked: sh.toggled(!sh.on)
+        }
     }
 
     component Stars: Row {
@@ -158,7 +171,7 @@ ApplicationWindow {
                 text: player.rating
                 font.pixelSize: 15
                 font.bold: true
-                color: "white"
+                color: window.accentInk
             }
             MouseArea {
                 anchors.fill: parent
@@ -176,7 +189,7 @@ ApplicationWindow {
                 text: index < player.rating ? "\u2605" : "\u2606"
                 font.pixelSize: 28
                 color: index < player.rating ?
-                       Material.color(Material.Amber) : Material.foreground
+                       window.starColor : Material.foreground
                 opacity: index < player.rating ? 1 : 0.6
                 padding: 3
                 MouseArea {
@@ -187,7 +200,8 @@ ApplicationWindow {
         }
     }
 
-    // Three bars that bounce while music plays and stand still when paused.
+    // Three bars that glide to random heights, in time with the song's BPM,
+    // while music plays and deflate to the lowest height when paused.
     component Equalizer: Item {
         id: eq
         property bool running: false
@@ -202,22 +216,59 @@ ApplicationWindow {
                     width: 5; radius: 1
                     color: Material.accent
                     anchors.bottom: parent.bottom
-                    height: 8
-                    SequentialAnimation on height {
+                    height: 3
+                    // the part above 15 px is red, like the peak of a meter
+                    Rectangle {
+                        anchors.top: parent.top
+                        width: parent.width; radius: 1
+                        height: Math.max(0, parent.height - 15)
+                        color: "#e53935"
+                    }
+                    // Playing: glide to a new random height; the farther it
+                    // goes, the longer it takes, so a big jump is not abrupt.
+                    NumberAnimation {
+                        id: glide
+                        target: bar
+                        property: "height"
+                        easing.type: Easing.InOutQuad
+                    }
+                    // Paused: fall to the lowest height at a steady speed, the
+                    // way a real display does.
+                    NumberAnimation {
+                        id: deflate
+                        target: bar
+                        property: "height"
+                        to: 3
+                        easing.type: Easing.Linear
+                    }
+                    // Each bar moves on its own division of the beat (once a
+                    // beat, twice a beat, three times in four), so they stay
+                    // in time with the song and still do not move together.
+                    Timer {
                         running: eq.running
-                        loops: Animation.Infinite
+                        repeat: true
+                        triggeredOnStart: true
+                        interval: 140
+                        onTriggered: {
+                            var step = 60000 / player.bpm *
+                                       [1, 0.5, 0.75][index]
+                            var to = 4 + Math.random() * 18
+                            glide.stop()
+                            glide.to = to
+                            glide.duration = Math.min(
+                                180 + Math.abs(to - bar.height) * 28,
+                                step * 0.85)
+                            glide.restart()
+                            interval = step
+                        }
                         onRunningChanged: {
-                            if (!running) bar.height = 8 + index * 4
-                        }
-                        NumberAnimation {
-                            to: 20 - index * 4
-                            duration: 320 + index * 110
-                            easing.type: Easing.InOutSine
-                        }
-                        NumberAnimation {
-                            to: 6 + index * 3
-                            duration: 380 - index * 60
-                            easing.type: Easing.InOutSine
+                            if (running) {
+                                deflate.stop()
+                            } else {
+                                glide.stop()
+                                deflate.duration = 100 + (bar.height - 3) * 45
+                                deflate.restart()
+                            }
                         }
                     }
                 }
@@ -235,9 +286,12 @@ ApplicationWindow {
         property bool marked: false
         property string heading
         property string sub
+        property string detail    // why a dynamic playlist chose the song
+        property bool reserve: false  // room for it before it arrives
+        property int detailHeight: 34
         property int rating: -1   // stars of a song that is not playing
         width: ListView.view.width
-        height: playingNow ? 104 : 64
+        height: (playingNow ? 104 : 64) + (detail !== "" || reserve ? detailHeight : 0)
         Behavior on height { NumberAnimation { duration: 150 } }
         property bool counted: false
         function syncCount() {
@@ -291,6 +345,14 @@ ApplicationWindow {
                     text: row.sub; width: parent.width; elide: Text.ElideRight
                     font.pixelSize: 13; opacity: row.playingNow ? 0.85 : 0.65
                 }
+                Label {
+                    visible: row.detail !== ""
+                    text: row.detail; width: parent.width
+                    wrapMode: Text.Wrap; maximumLineCount: 2
+                    elide: Text.ElideRight
+                    font.pixelSize: 12; opacity: 0.8
+                    color: Material.accent
+                }
                 Stars { visible: row.playingNow }
             }
             // the rating of the other songs: five stars, none when not rated
@@ -298,10 +360,11 @@ ApplicationWindow {
                 visible: !row.playingNow && row.rating >= 0
                 Layout.alignment: Qt.AlignVCenter
                 Layout.rightMargin: 4
-                text: "\u2605".repeat(row.rating) +
+                text: row.rating < 0 ? "" :
+                      "\u2605".repeat(row.rating) +
                       "\u2606".repeat(5 - row.rating)
                 font.pixelSize: 15
-                color: Material.color(Material.Amber)
+                color: window.starColor
             }
         }
     }
@@ -441,6 +504,9 @@ ApplicationWindow {
                 heading: title
                 sub: artist + (album ? "  ·  " + album : "")
                 rating: model.rating
+                detail: model.detail
+                reserve: true
+                detailHeight: 20
                 onClicked: { player.playRow(index); searchField.focus = false }
             }
         }
@@ -551,6 +617,8 @@ ApplicationWindow {
                 heading: title
                 sub: artist + (album ? "  ·  " + album : "")
                 rating: model.rating
+                detail: model.detail
+                reserve: player.openDynamic
                 onClicked: player.playEntry(index)
             }
         }
@@ -627,7 +695,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     visible: text !== "" && tracks.total > 0
                     text: player.message
-                    color: Material.color(Material.Red)
+                    color: window.errorColor
                     wrapMode: Text.Wrap; font.pixelSize: 12
                 }
                 // what the equalizer is doing, at a glance; the EQ button in
@@ -660,6 +728,7 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     ShuffleButton {
                         on: player.shuffle
+                        available: player.shuffleAvailable
                         onToggled: function(value) { player.shuffle = value }
                     }
                     RoundButton {
@@ -671,7 +740,7 @@ ApplicationWindow {
                     RoundButton {
                         text: player.playing ? "⏸" : "▶"; font.pixelSize: 26
                         Material.background: Material.accent
-                        Material.foreground: "white"
+                        Material.foreground: window.accentInk
                         onClicked: {
                             // on the Playlists tab with nothing playing, play
                             // starts the marked playlist, not the first song of
@@ -719,12 +788,9 @@ ApplicationWindow {
         function onSyncFinished() { syncDialog.close() }
     }
 
-    Dialog {
+    PopupDialog {
         id: equalizer
         title: "Equalizer"
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: window.width - 32
         standardButtons: Dialog.Close
         ColumnLayout {
             anchors.fill: parent
@@ -844,27 +910,133 @@ ApplicationWindow {
                     }
                 }
             }
+            // saved presets: "Save as" keeps the five sliders under a name;
+            // Delete removes the saved preset that is shown
+            RowLayout {
+                Layout.fillWidth: true
+                Button {
+                    text: "Save as\u2026"
+                    enabled: !presetRow.locked
+                    onClicked: {
+                        presetName.text = player.eqCustomNames.indexOf(
+                            player.eqShownPreset) >= 0
+                            ? player.eqShownPreset : ""
+                        presetError.text = ""
+                        savePreset.open()
+                        presetName.forceActiveFocus()
+                    }
+                }
+                Button {
+                    text: "Delete"
+                    enabled: player.eqCustomNames.indexOf(
+                                 player.eqShownPreset) >= 0
+                    onClicked: player.deleteEqPreset(player.eqShownPreset)
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                opacity: 0.7
+                text: "With Auto on, a saved preset is used for a song when " +
+                      "one of its genres contains the preset's name."
+            }
+        }
+    }
+
+    PopupDialog {
+        id: savePreset
+        title: "Save preset"
+        standardButtons: Dialog.Save | Dialog.Cancel
+        onAccepted: {
+            var why = player.saveEqPreset(presetName.text)
+            if (why !== "") {
+                presetError.text = why
+                open()
+            }
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            TextField {
+                id: presetName
+                Layout.fillWidth: true
+                placeholderText: "Name, such as a genre"
+            }
+            Label {
+                id: presetError
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Material.accent
+                visible: text !== ""
+            }
+        }
+    }
+
+    // The pop-up windows (the three-dot menu and its dialogs): a dimmed page
+    // behind, a border in the accent colour and a bold accent title, so that
+    // they stand out from the page in both the light and the dark theme.
+    component PopupDialog: Dialog {
+        readonly property bool night: Qt.styleHints.colorScheme === Qt.Dark
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Overlay.overlay.width - 32
+        standardButtons: Dialog.Close
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, night ? 0.75 : 0.6) }
+        background: Rectangle {
+            radius: 16
+            color: night ? "#36323f" : "#ffffff"
+            border.width: 3
+            border.color: Material.accent
+        }
+        header: Label {
+            text: title
+            font.pixelSize: 22
+            font.bold: true
+            color: Material.accent
+            padding: 18
+            bottomPadding: 6
         }
     }
 
     // the three-dot menu: one entry per concern, each with a dialog of its own
     Menu {
         id: mainMenu
-        MenuItem { text: "Volume..."; onTriggered: volumeDialog.open() }
-        MenuItem { text: "Equalizer..."; onTriggered: equalizer.open() }
-        MenuItem { text: "Library..."; onTriggered: libraryDialog.open() }
+        readonly property bool night: Qt.styleHints.colorScheme === Qt.Dark
+        modal: true
+        dim: true
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, night ? 0.75 : 0.6) }
+        background: Rectangle {
+            implicitWidth: 260
+            radius: 12
+            color: mainMenu.night ? "#36323f" : "#ffffff"
+            border.width: 3
+            border.color: Material.accent
+        }
         MenuItem {
-            text: "Sync with the desktop..."
+            text: "Volume..."; font.pixelSize: 18; height: 52
+            onTriggered: volumeDialog.open()
+        }
+        MenuItem {
+            text: "Equalizer..."; font.pixelSize: 18; height: 52
+            onTriggered: equalizer.open()
+        }
+        MenuItem {
+            text: "Library..."; font.pixelSize: 18; height: 52
+            onTriggered: libraryDialog.open()
+        }
+        MenuItem {
+            text: "Sync with the desktop..."; font.pixelSize: 18; height: 52
             onTriggered: syncDialog.open()
+        }
+        MenuItem {
+            text: "Build " + player.build
+            enabled: false; font.pixelSize: 13; height: 36
         }
     }
 
-    Dialog {
+    PopupDialog {
         id: volumeDialog
         title: "Volume"
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: window.width - 32
         standardButtons: Dialog.Close
         ColumnLayout {
             anchors.fill: parent
@@ -898,12 +1070,9 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    PopupDialog {
         id: libraryDialog
         title: "Library"
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: window.width - 32
         standardButtons: Dialog.Close
         ColumnLayout {
             anchors.fill: parent
@@ -937,16 +1106,12 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    PopupDialog {
         id: syncDialog
         title: "Sync with the desktop"
-        modal: true
         closePolicy: player.syncRunning
             ? Popup.NoAutoClose
             : Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        anchors.centerIn: Overlay.overlay
-        width: window.width - 32
-        standardButtons: Dialog.Close
         onRejected: if (player.syncRunning) player.stopSync()
         ColumnLayout {
             anchors.fill: parent
