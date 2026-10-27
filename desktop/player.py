@@ -26,6 +26,7 @@ import random
 import re
 import sqlite3
 import sys
+from types import SimpleNamespace
 
 from PyQt6.QtCore import (
     QAbstractProxyModel,
@@ -569,7 +570,192 @@ class ColumnsDialog(QDialog):
         ]
 
 
+class TransportBar(QWidget):
+    # What is playing and the controls: one for each tab, so that each tab
+    # plays on its own (see MainWindow._activate).
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.now_playing = QLabel("Nothing playing")
+        self.now_playing.setStyleSheet("font-weight: bold")
+        self.rating_bar = (
+            RatingBar()
+        )  # the playing track's rating, set here as on the phone
+        self.section_label = (
+            QLabel()
+            # the section of a container / sequence being played, and the time
+            # left
+        )
+        self.section_label.hide()
+        self.prev_button = QPushButton("⏮")
+        self.play_button = QPushButton("▶")
+        self.next_button = QPushButton("⏭")
+        self.stop_button = QPushButton("⏹")
+        self.shuffle_button = QPushButton("🔀")
+        self.shuffle_button.setCheckable(True)
+        self.shuffle_button.setToolTip(
+            "Random order (Ctrl+R): no track repeats until all have played"
+        )
+        for b in (
+            self.prev_button,
+            self.play_button,
+            self.next_button,
+            self.stop_button,
+            self.shuffle_button,
+        ):
+            b.setFixedWidth(44)
+        self.seek = QSlider(Qt.Orientation.Horizontal)
+        self.time_label = QLabel("0:00 / 0:00")
+        self.volume = QSlider(Qt.Orientation.Horizontal)
+        self.volume.setRange(0, 100)
+        self.volume.setValue(70)
+        self.volume.setFixedWidth(110)
+
+        controls = QHBoxLayout()
+        for w in (
+            self.prev_button,
+            self.play_button,
+            self.next_button,
+            self.stop_button,
+            self.shuffle_button,
+        ):
+            controls.addWidget(w)
+        controls.addWidget(self.seek, 1)
+        controls.addWidget(self.time_label)
+        controls.addWidget(QLabel("Vol"))
+        controls.addWidget(self.volume)
+        now_row = QHBoxLayout()
+        now_row.addWidget(self.now_playing, 1)
+        now_row.addWidget(self.rating_bar)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(now_row)
+        layout.addWidget(self.section_label)
+        layout.addLayout(controls)
+
+
+# The state of what a tab is playing, kept while another tab plays.
+DECK_FIELDS = {
+    "playing": None,
+    "queue": None,
+    "queue_pos": 0,
+    "queue_playlist": None,
+    "schedule": None,
+    "heard": set,
+    "history": list,
+    "heard_ms": 0,
+    "last_position": None,
+    "play_recorded": False,
+    "skippable": False,
+    "section_pending": False,
+    "fade": 1.0,
+    "position": 0,
+}
+
+
 class MainWindow(QMainWindow):
+    # The widgets of what is playing belong to the tab that plays: these
+    # names are those of the active tab's bar.
+    now_playing = property(lambda self: self.bars[self.active].now_playing)
+    rating_bar = property(lambda self: self.bars[self.active].rating_bar)
+    section_label = property(lambda self: self.bars[self.active].section_label)
+    prev_button = property(lambda self: self.bars[self.active].prev_button)
+    play_button = property(lambda self: self.bars[self.active].play_button)
+    next_button = property(lambda self: self.bars[self.active].next_button)
+    stop_button = property(lambda self: self.bars[self.active].stop_button)
+    shuffle_button = property(
+        lambda self: self.bars[self.active].shuffle_button
+    )
+    seek = property(lambda self: self.bars[self.active].seek)
+    time_label = property(lambda self: self.bars[self.active].time_label)
+    volume = property(lambda self: self.bars[self.active].volume)
+    # The song list of the tab that is shown, and the one the playing tab
+    # plays from (the Tags tab has its own list; the other tabs use the
+    # Library's).
+    lst = property(
+        lambda self: self.lists[
+            1 if getattr(self, "tabs", None) and self.tabs.currentIndex() == 2
+            else 0
+        ]
+    )
+    play_lst = property(lambda self: self.lists[1 if self.active == 2 else 0])
+    table = property(lambda self: self.lst.table)
+    proxy = property(lambda self: self.lst.proxy)
+    search = property(lambda self: self.lst.search)
+
+    def _make_song_list(self) -> SimpleNamespace:
+        lst = SimpleNamespace(last_selection=QItemSelection())
+        lst.proxy = LibraryProxy(self)
+        lst.proxy.setSourceModel(self.model)
+        table = lst.table = QTableView()
+        table.setModel(lst.proxy)
+        table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSortingEnabled(True)
+        table.verticalHeader().hide()
+        table.verticalHeader().setDefaultSectionSize(22)
+        table.horizontalHeader().setStretchLastSection(True)
+        for i, (_n, _k, width) in enumerate(COLUMNS):
+            table.setColumnWidth(
+                i, width
+            )  # (the rating column is sized below, to fit its stars)
+        table.setItemDelegateForColumn(
+            self.rating_column,
+            RatingDelegate(
+                lambda index, rating: self._rate_cell(index, rating, lst),
+                table,
+            ),
+        )
+        table.setColumnWidth(
+            self.rating_column, 2 * STAR_MARGIN + 5 * STAR_SLOT
+        )
+        header = table.horizontalHeader()
+        header.setSectionsMovable(True)
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(
+            lambda _pos: self.edit_columns()
+        )
+        for i, (_n, key, _w) in enumerate(COLUMNS):
+            table.setColumnHidden(i, key in HIDDEN_BY_DEFAULT)
+        # (a double-click on the rating column clears the rating; it must not
+        # also start playback)
+        table.doubleClicked.connect(
+            lambda index: index.column() != self.rating_column
+            and self.play_index(index, lst)
+        )
+        table.selectionModel().selectionChanged.connect(
+            lambda *_: self._selection_changed(lst)
+        )
+        table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        table.customContextMenuRequested.connect(
+            lambda pos: self._table_menu(lst, pos)
+        )
+
+        search = lst.search = QLineEdit()
+        search.setPlaceholderText(
+            'Search words (or artist:dio, album:"the wall", =dio for the whole'
+            " word)..."
+        )
+        search.setClearButtonEnabled(True)
+        timer = lst.search_timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(250)
+        timer.timeout.connect(
+            lambda: lst.proxy.set_filter(search.text()) or self._update_status()
+        )
+        search.textChanged.connect(lambda _: timer.start())
+        lst.pane = QWidget()
+        layout = QVBoxLayout(lst.pane)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(search)
+        layout.addWidget(table, 1)
+        return lst
+
     def tidy_playlists(self) -> None:
         # Dynamic playlists that are short (a longer length, removed entries)
         # are filled; done after the window is shown.
@@ -577,9 +763,9 @@ class MainWindow(QMainWindow):
             self.playlist_panel.refresh()
 
     def _make_sound(self) -> tuple:
-        # Qt takes about two seconds to find the sound devices, so the output
-        # and the player are made after the window is shown (or at the first
-        # use, if that comes sooner).
+        # The audio output takes up to 1.8 s to make (Qt looks up the sound
+        # devices), so it is made after the window is shown, or at the first
+        # play.
         if self._sound is None:
             audio = QAudioOutput()
             audio.setVolume(0.7)
@@ -644,71 +830,14 @@ class MainWindow(QMainWindow):
         self.section_pending = False
         self.fade = 1.0  # fade-out factor at the end of a section
         self._quiet = False
-        self._last_selection = QItemSelection()
 
         self.model = LibraryModel(db, self)
-        self.proxy = LibraryProxy(self)
-        self.proxy.setSourceModel(self.model)
-        self.table = QTableView()
-        self.table.setModel(self.proxy)
-        self.table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self.table.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSortingEnabled(True)
-        self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(22)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        for i, (_n, _k, width) in enumerate(COLUMNS):
-            self.table.setColumnWidth(
-                i, width
-            )  # (the rating column is sized below, to fit its stars)
         self.rating_column = next(
             i for i, c in enumerate(COLUMNS) if c[1] == "@rating"
         )
-        self.table.setItemDelegateForColumn(
-            self.rating_column, RatingDelegate(self._rate_cell, self.table)
-        )
-        self.table.setColumnWidth(
-            self.rating_column, 2 * STAR_MARGIN + 5 * STAR_SLOT
-        )
-        header = self.table.horizontalHeader()
-        header.setSectionsMovable(True)
-        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        header.customContextMenuRequested.connect(
-            lambda _pos: self.edit_columns()
-        )
-        for i, (_n, key, _w) in enumerate(COLUMNS):
-            self.table.setColumnHidden(i, key in HIDDEN_BY_DEFAULT)
-        # (a double-click on the rating column clears the rating; it must not
-        # also start playback)
-        self.table.doubleClicked.connect(
-            lambda index: index.column() != self.rating_column
-            and self.play_index(index)
-        )
-        self.table.selectionModel().selectionChanged.connect(
-            self._selection_changed
-        )
-        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self._table_menu)
-
-        self.search = QLineEdit()
-        self.search.setPlaceholderText(
-            'Search words (or artist:dio, album:"the wall", =dio for the whole'
-            " word)..."
-        )
-        self.search.setClearButtonEnabled(True)
-        self.search_timer = QTimer(self)
-        self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(250)
-        self.search_timer.timeout.connect(
-            lambda: self.proxy.set_filter(self.search.text())
-            or self._update_status()
-        )
-        self.search.textChanged.connect(lambda _: self.search_timer.start())
+        # Two song lists, entirely separate: the Library tab's and the Tags
+        # tab's, each with its own search, sort, columns and selection.
+        self.lists = [self._make_song_list(), self._make_song_list()]
 
         # -- playback --
         self.leveling, self.leveling_target = (
@@ -723,77 +852,42 @@ class MainWindow(QMainWindow):
         self.stall_timer.timeout.connect(self._check_stalled_start)
         self.stall_timer.start()
 
-        self.now_playing = QLabel("Nothing playing")
-        self.now_playing.setStyleSheet("font-weight: bold")
-        self.rating_bar = (
-            RatingBar()
-        )  # the playing track's rating, set here as on the phone
-        self.rating_bar.rate.connect(self._rate_playing)
-        self.section_label = (
-            QLabel()
-            # the section of a container / sequence being played, and the time
-            # left
-        )
-        self.section_label.hide()
-        self.prev_button = QPushButton("⏮")
-        self.play_button = QPushButton("▶")
-        self.next_button = QPushButton("⏭")
-        self.stop_button = QPushButton("⏹")
-        self.shuffle_button = QPushButton("🔀")
-        self.shuffle_button.setCheckable(True)
-        self.shuffle_button.setToolTip(
-            "Random order (Ctrl+R): no track repeats until all have played"
-        )
-        self.shuffle_button.toggled.connect(self._shuffle_toggled)
-        for b in (
-            self.prev_button,
-            self.play_button,
-            self.next_button,
-            self.stop_button,
-            self.shuffle_button,
-        ):
-            b.setFixedWidth(44)
-        self.prev_button.clicked.connect(self.previous)
-        self.play_button.clicked.connect(self.toggle)
-        self.next_button.clicked.connect(self.next)
-        self.stop_button.clicked.connect(self.stop)
-        self.seek = QSlider(Qt.Orientation.Horizontal)
-        self.seek.sliderMoved.connect(lambda p: self.player.setPosition(p))
-        self.seek.sliderReleased.connect(
-            lambda: self.player.setPosition(self.seek.value())
-        )
-        self.time_label = QLabel("0:00 / 0:00")
-        self.volume = QSlider(Qt.Orientation.Horizontal)
-        self.volume.setRange(0, 100)
-        self.volume.setValue(70)
-        self.volume.setFixedWidth(110)
-        self.volume.valueChanged.connect(lambda _v: self._apply_volume())
 
-        controls = QHBoxLayout()
-        for w in (
-            self.prev_button,
-            self.play_button,
-            self.next_button,
-            self.stop_button,
-            self.shuffle_button,
-        ):
-            controls.addWidget(w)
-        controls.addWidget(self.seek, 1)
-        controls.addWidget(self.time_label)
-        controls.addWidget(QLabel("Vol"))
-        controls.addWidget(self.volume)
+        self.bars = [TransportBar(), TransportBar(), TransportBar()]
+        self.active = 0  # the tab whose bar plays
+        self.decks = [self._new_deck() for _ in self.bars]
+        self._pending_seek: int | None = None
+        self._switching = False
+        for i, bar in enumerate(self.bars):
+            bar.rating_bar.rate.connect(
+                lambda r, i=i: (self._activate(i), self._rate_playing(r))
+            )
+            bar.shuffle_button.toggled.connect(self._shuffle_toggled)
+            bar.prev_button.clicked.connect(
+                lambda _c=False, i=i: self._bar_action(i, self.previous)
+            )
+            bar.play_button.clicked.connect(
+                lambda _c=False, i=i: self._bar_action(i, self.toggle)
+            )
+            bar.next_button.clicked.connect(
+                lambda _c=False, i=i: self._bar_action(i, self.next)
+            )
+            bar.stop_button.clicked.connect(
+                lambda _c=False, i=i: self._bar_action(i, self.stop)
+            )
+            bar.seek.sliderMoved.connect(
+                lambda p, i=i: self.active == i and self.player.setPosition(p)
+            )
+            bar.seek.sliderReleased.connect(
+                lambda i=i: self.active == i
+                and self.player.setPosition(self.bars[i].seek.value())
+            )
+            bar.volume.valueChanged.connect(
+                lambda v, i=i: self._volume_moved(i, v)
+            )
 
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(self.search)
-        left_layout.addWidget(self.table, 1)
-        now_row = QHBoxLayout()
-        now_row.addWidget(self.now_playing, 1)
-        now_row.addWidget(self.rating_bar)
-        left_layout.addLayout(now_row)
-        left_layout.addWidget(self.section_label)
-        left_layout.addLayout(controls)
+        # the library: the search box and the song list
+        library_page = self.lists[0].pane
 
         # -- tag editing --
         self.summary = QLabel("No tracks selected")
@@ -818,17 +912,27 @@ class MainWindow(QMainWindow):
         self.playlist_panel = PlaylistPanel(db, can_play=True)
         self.playlist_panel.play_requested.connect(self.play_playlist)
         self.playlist_panel.changed.connect(self._playlist_changed)
-        right = QTabWidget()
-        right.addTab(tags_page, "Tags")
-        right.addTab(self.playlist_panel, "Playlists")
-        self.right_tabs = right
-
-        self.splitter = QSplitter()
-        self.splitter.addWidget(left)
-        self.splitter.addWidget(right)
-        self.splitter.setStretchFactor(0, 3)
-        self.splitter.setStretchFactor(1, 2)
-        self.setCentralWidget(self.splitter)
+        # One task at a time: Library, Playlists or Tags (Ctrl+1, 2, 3).
+        self.tabs = QTabWidget()
+        self.tags_split = QSplitter()
+        self.tags_split.addWidget(self.lists[1].pane)
+        self.tags_split.addWidget(tags_page)
+        self.tags_split.setStretchFactor(0, 3)
+        self.tags_split.setStretchFactor(1, 2)
+        # Each tab has what is playing and the controls of its own, below its
+        # content, and plays on its own.
+        for page, name, bar in zip(
+            (library_page, self.playlist_panel, self.tags_split),
+            ("&Library", "&Playlists", "&Tags"),
+            self.bars,
+        ):
+            holder = QWidget()
+            holder_layout = QVBoxLayout(holder)
+            holder_layout.setContentsMargins(0, 0, 0, 0)
+            holder_layout.addWidget(page, 1)
+            holder_layout.addWidget(bar)
+            self.tabs.addTab(holder, name)
+        self.setCentralWidget(self.tabs)
         self.status_label = QLabel()
         self.statusBar().addPermanentWidget(self.status_label)
 
@@ -838,18 +942,99 @@ class MainWindow(QMainWindow):
         self._layout_timer.setSingleShot(True)
         self._layout_timer.setInterval(500)
         self._layout_timer.timeout.connect(self._save_layout)
-        self.splitter.splitterMoved.connect(
-            lambda *_: self._layout_timer.start()
-        )
-        self.table.horizontalHeader().sectionMoved.connect(
-            lambda *_: self._layout_timer.start()
-        )
-        self.table.horizontalHeader().sectionResized.connect(
-            lambda *_: self._layout_timer.start()
-        )
+        self.tabs.currentChanged.connect(self._tab_changed)
+        self._tab_changed(self.tabs.currentIndex())
+        for lst in self.lists:
+            lst.table.horizontalHeader().sectionMoved.connect(
+                lambda *_: self._layout_timer.start()
+            )
+            lst.table.horizontalHeader().sectionResized.connect(
+                lambda *_: self._layout_timer.start()
+            )
         self._editor_changed()
         self._state_changed()
         self._update_status()
+
+    # -- the tabs play one at a time ----------------------------------------
+
+    @staticmethod
+    def _new_deck() -> dict:
+        return {
+            k: (v() if callable(v) else v) for k, v in DECK_FIELDS.items()
+        }
+
+    def _bar_action(self, tab: int, action) -> None:
+        # A control of a tab's bar was used: that tab plays.
+        self._activate(tab)
+        action()
+
+    def _user(self, action) -> None:
+        # A menu command or shortcut: it works on the tab that is shown.
+        self._activate(self.tabs.currentIndex())
+        action()
+
+    def _activate(self, tab: int) -> None:
+        # The tab's bar takes over the sound.  What the tab that played was
+        # playing is kept, paused where it was; this tab's own song comes back
+        # paused where it was left (or nothing, if it was not playing).
+        if tab == self.active:
+            return
+        old = {k: getattr(self, k) for k in DECK_FIELDS if k != "position"}
+        old["position"] = self.player.position() if self._sound else 0
+        self.decks[self.active] = old
+        self._switching = True
+        try:
+            if self._sound:
+                self.player.pause() if (
+                    self.player.playbackState()
+                    == QMediaPlayer.PlaybackState.PlayingState
+                ) else None
+            self.bars[self.active].play_button.setText("▶")
+            self.active = tab
+            new = self.decks[tab]
+            for k in DECK_FIELDS:
+                if k != "position":
+                    setattr(self, k, new[k])
+            self.model.set_playing(self.playing)
+            if self.playing is not None and self._sound is not None:
+                self.player.setSource(
+                    QUrl.fromLocalFile(self.full_path(self.playing))
+                )
+                self.player.pause()
+                self._pending_seek = new["position"]
+            elif self._sound:
+                self.player.stop()
+                self._pending_seek = None
+            self._apply_volume()
+            self._update_rating_bar()
+            self.play_button.setText("▶")
+            self._update_shuffle_lock()
+        finally:
+            self._switching = False
+
+    def _volume_moved(self, tab: int, value: int) -> None:
+        for i, bar in enumerate(self.bars):
+            if i != tab and bar.volume.value() != value:
+                bar.volume.blockSignals(True)
+                bar.volume.setValue(value)
+                bar.volume.blockSignals(False)
+        self._apply_volume()
+
+    def _mirror_shuffle(self) -> None:
+        # One shuffle setting: every bar's button shows it.
+        mine = self.shuffle_button
+        for bar in self.bars:
+            if bar.shuffle_button is mine:
+                continue
+            bar.shuffle_button.blockSignals(True)
+            bar.shuffle_button.setChecked(mine.isChecked())
+            bar.shuffle_button.setEnabled(mine.isEnabled())
+            bar.shuffle_button.setToolTip(mine.toolTip())
+            bar.shuffle_button.blockSignals(False)
+
+    def _tab_changed(self, index: int) -> None:
+        self._update_status()
+        self._layout_timer.start()
 
     # -- library -----------------------------------------------------------
 
@@ -906,13 +1091,16 @@ class MainWindow(QMainWindow):
         # Sorting and filtering all the tracks again takes most of a second,
         # so only when the change can move a row: the table is sorted by one
         # of the changed tags, or a search is active.
-        column = self.proxy.sortColumn()
-        sorted_by = COLUMNS[column][1] if 0 <= column < len(COLUMNS) else None
-        if self.proxy.needles or sorted_by in keys:
-            self.proxy.invalidate()
+        for lst in self.lists:
+            column = lst.proxy.sortColumn()
+            sorted_by = (
+                COLUMNS[column][1] if 0 <= column < len(COLUMNS) else None
+            )
+            if lst.proxy.needles or sorted_by in keys:
+                lst.proxy.invalidate()
 
     def _update_status(self) -> None:
-        shown, total = self.proxy.rowCount(), self.model.rowCount()
+        shown, total = self.proxy.rowCount(), self.model.rowCount()  # (shown tab)
         self.status_label.setText(
             f"{shown} of {total} tracks"
             if shown != total
@@ -921,24 +1109,25 @@ class MainWindow(QMainWindow):
 
     # -- playback ----------------------------------------------------------
 
-    def path_at(self, row: int) -> str:
-        return self.model.paths[
-            self.proxy.mapToSource(self.proxy.index(row, 0)).row()
-        ]
+    def path_at(self, row: int, lst=None) -> str:
+        proxy = (lst or self.lst).proxy
+        return self.model.paths[proxy.mapToSource(proxy.index(row, 0)).row()]
 
-    def play_index(self, index) -> None:
+    def play_index(self, index, lst) -> None:
+        self._activate(2 if lst is self.lists[1] else 0)
         self.errors_in_a_row = 0
         self._end_schedule()
         self.queue, self.queue_playlist = (
             None,
             None,
         )  # playing from the library view again
-        self.play_row(index.row())
+        self.play_row(index.row(), True, lst)
 
-    def play_row(self, row: int, record: bool = True) -> None:
+    def play_row(self, row: int, record: bool = True, lst=None) -> None:
         # Play the track at this row of the (sorted, filtered) view.
-        if 0 <= row < self.proxy.rowCount():
-            self.play_path(self.path_at(row), record)
+        lst = lst or self.play_lst
+        if 0 <= row < lst.proxy.rowCount():
+            self.play_path(self.path_at(row, lst), record)
 
     def play_path(self, path: str, record: bool = True) -> None:
         self._update_shuffle_lock()
@@ -968,7 +1157,8 @@ class MainWindow(QMainWindow):
         if self.queue is None:
             row = self._row_in_view(path)
             if row >= 0:
-                self.table.scrollTo(self.proxy.index(row, 0))
+                lst = self.play_lst
+                lst.table.scrollTo(lst.proxy.index(row, 0))
         full = self.full_path(path)
         if not os.path.exists(full):
             self._skip(f"Missing file: {path}")
@@ -987,7 +1177,7 @@ class MainWindow(QMainWindow):
     def _row_in_view(self, path: str) -> int:
         # Row of this track in the current view, or -1 (e.g. it was filtered
         # out).
-        index = self.proxy.mapFromSource(
+        index = self.play_lst.proxy.mapFromSource(
             self.model.index(self.model.row_of(path), 0)
         )
         return index.row() if index.isValid() else -1
@@ -1000,7 +1190,8 @@ class MainWindow(QMainWindow):
         # played, else the library view.
         if self.queue is not None:
             return self.queue
-        return [self.path_at(r) for r in range(self.proxy.rowCount())]
+        lst = self.play_lst
+        return [self.path_at(r, lst) for r in range(lst.proxy.rowCount())]
 
     def _position(self) -> int:
         # Index in the sequence of the track playing, -1 if none.
@@ -1037,6 +1228,7 @@ class MainWindow(QMainWindow):
             )
         finally:
             self._shuffle_locking = False
+        self._mirror_shuffle()
 
     def _shuffle_toggled(self, on: bool) -> None:
         if self._shuffle_locking:
@@ -1045,6 +1237,7 @@ class MainWindow(QMainWindow):
         self.shuffle_wanted = on
         self.shuffle_action.setChecked(on)
         self.shuffle_button.setChecked(on)
+        self._mirror_shuffle()
         self.heard = {self.playing} if self.playing else set()
         self.history = [self.playing] if self.playing else []
 
@@ -1105,6 +1298,7 @@ class MainWindow(QMainWindow):
         # Play a playlist from this entry (-1 = the first, or a random one when
         # shuffling).  shuffle: True / False
         # sets the shuffle button; None leaves it as it is.
+        self._activate(1)
         if self.db.kinds().get(playlist_id) in ("container", "sequence"):
             self.play_schedule(playlist_id, start_row, shuffle)
             return
@@ -1304,13 +1498,14 @@ class MainWindow(QMainWindow):
                 min(self.queue_pos, len(self.queue)) - 1 if self.queue else -1
             )
 
-    def _table_menu(self, pos) -> None:
-        index = self.table.indexAt(pos)
-        if index.isValid() and not self.table.selectionModel().isRowSelected(
+    def _table_menu(self, lst, pos) -> None:
+        table = lst.table
+        index = table.indexAt(pos)
+        if index.isValid() and not table.selectionModel().isRowSelected(
             index.row()
         ):
-            self.table.selectRow(index.row())
-        paths = self._selected_files()
+            table.selectRow(index.row())
+        paths = self._selected_files(lst)
         menu = QMenu(self)
         populate_add_menu(menu, self.db, paths, self, self._added_to_playlist)
         if paths:
@@ -1322,7 +1517,7 @@ class MainWindow(QMainWindow):
                 "Measure loudness",
                 lambda: self.analyse(measure_loudness, paths),
             )
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        menu.exec(table.viewport().mapToGlobal(pos))
 
     def analyse(self, action, paths: list[str]) -> None:
         # Detect the BPM of, or measure the loudness of, these files; stored in
@@ -1350,10 +1545,14 @@ class MainWindow(QMainWindow):
             self.player.play()
         else:
             self.errors_in_a_row = 0
+            if self.active == 1:
+                # in the Playlists tab Play starts the selected playlist
+                if self.playlist_panel.play_selected():
+                    return
             if self.queue:
                 self._play_at(min(max(self.queue_pos, 0), len(self.queue) - 1))
                 return
-            rows = self.table.selectionModel().selectedRows()
+            rows = self.play_lst.table.selectionModel().selectedRows()
             self.play_row(rows[0].row() if rows else 0)
 
     def _skip(self, message: str) -> None:
@@ -1369,11 +1568,24 @@ class MainWindow(QMainWindow):
             self.next()
         elif status == QMediaPlayer.MediaStatus.BufferedMedia:
             self.errors_in_a_row = 0
+        if (
+            self._pending_seek is not None
+            and status
+            in (
+                QMediaPlayer.MediaStatus.LoadedMedia,
+                QMediaPlayer.MediaStatus.BufferedMedia,
+            )
+        ):
+            # the song of a tab that was paused comes back where it was
+            self.player.setPosition(self._pending_seek)
+            self._pending_seek = None
 
     def _player_error(self, _error, message: str) -> None:
         self._skip(f"Cannot play {self.playing}: {message}")
 
     def _state_changed(self, *_) -> None:
+        if self._switching:
+            return
         state = (
             self.player.playbackState()
             if self._sound
@@ -1490,28 +1702,33 @@ class MainWindow(QMainWindow):
 
     # -- tag editing -------------------------------------------------------
 
-    def _selected_files(self) -> list[str]:
+    def _selected_files(self, lst=None) -> list[str]:
+        lst = lst or self.lst
         rows = sorted(
-            i.row() for i in self.table.selectionModel().selectedRows()
+            i.row() for i in lst.table.selectionModel().selectedRows()
         )
-        return [self.path_at(r) for r in rows]
+        return [self.path_at(r, lst) for r in rows]
 
-    def _selection_changed(self, *_) -> None:
+    def _selection_changed(self, lst) -> None:
+        # Only the Tags tab's list drives the tag editor; the Library tab's
+        # selection is for rating and the playlist menu.
+        if lst is not self.lists[1]:
+            return
         if self._quiet:
             return
         if not self._confirm_discard():
             self._quiet = True
-            self.table.selectionModel().select(
-                self._last_selection,
+            lst.table.selectionModel().select(
+                lst.last_selection,
                 QItemSelectionModel.SelectionFlag.ClearAndSelect
                 | QItemSelectionModel.SelectionFlag.Rows,
             )
             self._quiet = False
             return
-        self._last_selection = QItemSelection(
-            self.table.selectionModel().selection()
+        lst.last_selection = QItemSelection(
+            lst.table.selectionModel().selection()
         )
-        self.current = self._selected_files()
+        self.current = self._selected_files(lst)
         self.editor.set_files(
             [self.db.tags[p] for p in self.current], self.root, self.current
         )
@@ -1522,6 +1739,14 @@ class MainWindow(QMainWindow):
             else f"Editing {n} track{'s' if n != 1 else ''}"
             + (f": {os.path.basename(self.current[0])}" if n == 1 else "")
         )
+
+    def rate_selection(self, rating) -> None:
+        # The Rating menu and Ctrl+0..5: the songs selected in the shown tab.
+        saved, self.current = self.current, self._selected_files()
+        try:
+            self.set_rating(rating)
+        finally:
+            self.current = saved
 
     def set_rating(self, rating) -> None:
         # Rate the selected tracks (0 to 5, None = not rated).  Stored at once,
@@ -1555,10 +1780,10 @@ class MainWindow(QMainWindow):
         finally:
             self.current = saved
 
-    def _rate_cell(self, index, rating) -> None:
+    def _rate_cell(self, index, rating, lst) -> None:
         # A rating cell was clicked: rate that track (the Rating menu and
         # Ctrl+0..5 rate the whole selection).
-        saved, self.current = self.current, [self.path_at(index.row())]
+        saved, self.current = self.current, [self.path_at(index.row(), lst)]
         try:
             self.set_rating(rating)
         finally:
@@ -1629,6 +1854,14 @@ class MainWindow(QMainWindow):
         add(menu, "&Review Phone Changes...", None, self.review_phone)
         add(menu, "&Quit", QKeySequence.StandardKey.Quit, self.close)
         menu = self.menuBar().addMenu("&View")
+        for number, name in enumerate(("Library", "Playlists", "Tags")):
+            add(
+                menu,
+                f"Show {name}",
+                f"Ctrl+{number + 1}",
+                lambda _checked=False, n=number: self.tabs.setCurrentIndex(n),
+            )
+        menu.addSeparator()
         self.duplicates_action = add(
             menu, "Show &duplicates", None, self._show_duplicates_toggled
         )
@@ -1656,7 +1889,12 @@ class MainWindow(QMainWindow):
             self.leveling_actions[key] = action
         add(levels, "Target &loudness...", None, self._set_target)
         menu = self.menuBar().addMenu("&Rating")
-        add(menu, "Not rated", "Ctrl+Backspace", lambda: self.set_rating(None))
+        add(
+            menu,
+            "Not rated",
+            "Ctrl+Backspace",
+            lambda: self.rate_selection(None),
+        )
         for n in range(6):
             add(
                 menu,
@@ -1664,14 +1902,20 @@ class MainWindow(QMainWindow):
                 + "\u2605" * n
                 + "\u2606" * (5 - n),
                 f"Ctrl+{n}",
-                lambda _=False, n=n: self.set_rating(n),
+                lambda _=False, n=n: self.rate_selection(n),
             )
         menu = self.menuBar().addMenu("&Playback")
-        add(menu, "&Play / Pause", "Ctrl+Space", self.toggle)
-        add(menu, "&Next", "Ctrl+Right", self.next)
-        add(menu, "P&revious", "Ctrl+Left", self.previous)
-        add(menu, "&Stop", "Ctrl+.", self.stop)
-        add(menu, "Next &section", "Ctrl+Shift+Right", self.next_section)
+        # (these work on the tab that is shown)
+        add(menu, "&Play / Pause", "Ctrl+Space", lambda: self._user(self.toggle))
+        add(menu, "&Next", "Ctrl+Right", lambda: self._user(self.next))
+        add(menu, "P&revious", "Ctrl+Left", lambda: self._user(self.previous))
+        add(menu, "&Stop", "Ctrl+.", lambda: self._user(self.stop))
+        add(
+            menu,
+            "Next &section",
+            "Ctrl+Shift+Right",
+            lambda: self._user(self.next_section),
+        )
         self.shuffle_action = add(
             menu,
             "Random &order",
@@ -1751,7 +1995,8 @@ class MainWindow(QMainWindow):
             self._apply_volume()
 
     def _show_duplicates_toggled(self, on: bool) -> None:
-        self.proxy.set_show_duplicates(on)
+        for lst in self.lists:
+            lst.proxy.set_show_duplicates(on)
         self._update_status()
 
     def open_db(self) -> None:
@@ -1773,10 +2018,11 @@ class MainWindow(QMainWindow):
         self.db = TagDb(path)
         self.root = self._media_root()
         self.model = LibraryModel(self.db, self)
-        self.proxy.setSourceModel(self.model)
+        for lst in self.lists:
+            lst.proxy.setSourceModel(self.model)
+            lst.last_selection = QItemSelection()
         self.playlist_panel.set_db(self.db)
         self.current = []
-        self._last_selection = QItemSelection()
         self.editor.set_files([])
         self._quiet = False
         self._update_status()
@@ -1810,30 +2056,35 @@ class MainWindow(QMainWindow):
         for pid in report.playlists_changed:
             self._playlist_changed(pid)
 
-    def _column_layout(self) -> dict:
+    def _column_layout(self, lst=None) -> dict:
         # The table's columns as they are now: order, hidden ones, and the width
         # of each shown one (by column key).
-        header = self.table.horizontalHeader()
+        table = (lst or self.lst).table
+        header = table.horizontalHeader()
         order = sorted(range(len(COLUMNS)), key=header.visualIndex)
         return {
             "order": [COLUMNS[i][1] for i in order],
             "hidden": [
-                COLUMNS[i][1] for i in order if self.table.isColumnHidden(i)
+                COLUMNS[i][1] for i in order if table.isColumnHidden(i)
             ],
             "widths": {
                 COLUMNS[i][1]: header.sectionSize(i)
                 for i in order
-                if not self.table.isColumnHidden(i)
+                if not table.isColumnHidden(i)
             },
         }
 
-    def _saved_columns(self, settings: QSettings) -> dict:
+    def _saved_columns(
+        self, settings: QSettings, key: str = "column_layout"
+    ) -> dict:
         try:
-            layout = json.loads(settings.value("column_layout", "") or "null")
+            layout = json.loads(settings.value(key, "") or "null")
             if isinstance(layout, dict):
                 return layout
         except (TypeError, ValueError):
             pass
+        if key != "column_layout":
+            return {}
         state = settings.value(
             "columns"
             # a layout saved by an older version: decode it with a header of its
@@ -1859,10 +2110,11 @@ class MainWindow(QMainWindow):
             },
         }
 
-    def _apply_columns(self, layout: dict) -> None:
+    def _apply_columns(self, layout: dict, lst=None) -> None:
         # Show the columns as saved; columns the saved layout does not know
         # (added since) go last, hidden or not as by default.
-        header = self.table.horizontalHeader()
+        table = (lst or self.lst).table
+        header = table.horizontalHeader()
         keys = [c[1] for c in COLUMNS]
         known = [k for k in layout.get("order", []) if k in keys]
         for position, key in enumerate(
@@ -1875,33 +2127,33 @@ class MainWindow(QMainWindow):
                 if key in known
                 else key in HIDDEN_BY_DEFAULT
             )
-            self.table.setColumnHidden(i, hidden)
+            table.setColumnHidden(i, hidden)
             width = layout.get("widths", {}).get(key)
             if width and not hidden and key != "@rating":
-                self.table.setColumnWidth(i, width)
+                table.setColumnWidth(i, width)
         if known and not any(
-            not self.table.isColumnHidden(i) for i in range(len(keys))
+            not table.isColumnHidden(i) for i in range(len(keys))
         ):
-            self.table.setColumnHidden(
+            table.setColumnHidden(
                 0, False
             )  # (a saved layout must never leave nothing to see)
 
     def _restore_layout(self) -> None:
         settings = QSettings("music-player", "player")
-        geometry, splitter = settings.value("geometry"), settings.value(
-            "splitter"
-        )
+        geometry = settings.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
-        if splitter is not None:
-            self.splitter.restoreState(splitter)
+        self.tabs.setCurrentIndex(
+            min(max(settings.value("tab", 0, type=int), 0), 2)
+        )
         self.shuffle_button.setChecked(
             settings.value("shuffle", False, type=bool)
         )
         self.duplicates_action.setChecked(
             settings.value("show_duplicates", False, type=bool)
         )
-        self.proxy.set_show_duplicates(self.duplicates_action.isChecked())
+        for lst in self.lists:
+            lst.proxy.set_show_duplicates(self.duplicates_action.isChecked())
         self.leveling_target = settings.value(
             "leveling_target", self.leveling_target, type=float
         )
@@ -1909,7 +2161,10 @@ class MainWindow(QMainWindow):
         self._set_leveling(
             mode if mode in ("off", "track", "album") else "track"
         )  # on (track mode) unless the user chose otherwise
-        self._apply_columns(self._saved_columns(settings))
+        self._apply_columns(self._saved_columns(settings), self.lists[0])
+        self._apply_columns(
+            self._saved_columns(settings, "tags_column_layout"), self.lists[1]
+        )
         if settings.contains(
             "volume"
         ):  # (value() with a type gives 0 when the setting is missing)
@@ -1918,8 +2173,14 @@ class MainWindow(QMainWindow):
     def _save_layout(self) -> None:
         settings = QSettings("music-player", "player")
         settings.setValue("geometry", self.saveGeometry())
-        settings.setValue("splitter", self.splitter.saveState())
-        settings.setValue("column_layout", json.dumps(self._column_layout()))
+        settings.setValue("tab", self.tabs.currentIndex())
+        settings.setValue(
+            "column_layout", json.dumps(self._column_layout(self.lists[0]))
+        )
+        settings.setValue(
+            "tags_column_layout",
+            json.dumps(self._column_layout(self.lists[1])),
+        )
         settings.remove("columns")  # the old, count-dependent format
         settings.remove("column_count")
         settings.setValue("volume", self.volume.value())

@@ -42,9 +42,41 @@ Player
 
     scripts/play [--database FILE]
 
-The window shows the library as a table, one row per song; duplicates
-are hidden unless View > Show duplicates is on.  The right side has two
-tabs: Tags (the tag editor, 03) and Playlists (04 to 06).
+The window has three tabs, one for each task:
+
+    Library     (Ctrl+1)  the library as a table, one row per song, and
+                          the search box; duplicates are hidden unless
+                          View > Show duplicates is on.
+    Playlists   (Ctrl+2)  the playlists, containers and sequences
+                          (04 to 06).
+    Tags        (Ctrl+3)  a song list of its own, with its search box,
+                          on the left and the tag editor on the right
+                          (03).  Select the songs to edit in the list.
+
+Each tab has its own "what is playing" line and controls (previous,
+play, next, stop, shuffle, position and volume) at the bottom, and
+plays on its own.  Music goes on playing when another tab is opened;
+the controls of that tab show nothing playing, until something is
+played from it.  Pressing Play there pauses what the first tab was
+playing, where it was, and starts the music of the tab that is shown.
+Going back to the first tab and pressing Play continues its song from
+the same place, and pauses the other.  So the Library tab can hold a
+song, the Playlists tab a playlist and the Tags tab another song, and
+Play on each one switches between them.  Shuffle and the volume are the
+same in all three tabs.  The Playback menu and its shortcuts work on the
+tab that is shown.
+
+Play in the Library and Tags tabs starts the selected song; in the
+Playlists tab it starts the selected playlist, from its selected entry
+or its start.
+
+The Library and Tags tabs are entirely separate.  Each has its own song
+list, with its own search, selection, sort order and columns (View >
+Columns changes those of the tab that is shown), and each plays from its
+own list.  Only the Tags tab's selection goes to the tag editor; the
+Library tab's selection is for rating and for the playlist menu.
+
+The window opens on the tab that was open when it was closed.
 
 Playing:
 

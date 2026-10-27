@@ -779,7 +779,7 @@ class PlaylistPanel(QWidget):
         top.setStretchFactor(0, 3)
         top.setStretchFactor(1, 1)
         top.setCollapsible(0, False)
-        top.setSizes([400, 150])
+        top.setSizes([200, 100])
 
         self.entries = QListWidget()
         self.entries.setSelectionMode(
@@ -852,6 +852,7 @@ class PlaylistPanel(QWidget):
         splitter.addWidget(top)
         splitter.addWidget(bottom)
         splitter.setStretchFactor(1, 3)
+        splitter.setSizes([300, 400])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
@@ -1321,7 +1322,15 @@ class PlaylistPanel(QWidget):
         self.refresh()
         self.changed.emit(pid)
 
-    def _play(self, row: int, shuffle) -> None:
+    def _play(self, row: int, shuffle) -> bool:
         pid = self.current_id()
         if self.can_play and pid is not None and self.entries.count():
             self.play_requested.emit(pid, row, shuffle)
+            return True
+        return False
+
+    def play_selected(self) -> bool:
+        # Play the selected playlist from the selected entry (or its start,
+        # or a random one when shuffling), leaving the shuffle button as it
+        # is.  False when there is nothing to play.
+        return self._play(self._first_selected_row(), None)
