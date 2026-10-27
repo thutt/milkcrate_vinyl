@@ -126,6 +126,22 @@ fi
     -DANDROID_NDK_ROOT="${sdk}/ndk/26.1.10909125" \
     -DANDROID_SDK_ROOT="${sdk}" "${source_dir}"
 cmake --build . --target apk
+# Qt ships two Multimedia backends and the deploy tool packs both.  The
+# player needs the buffer output of the FFmpeg one (the equalizer); the
+# Android one lacks it and is never chosen, so it is left out.  Qt's startup
+# loads the libraries named in res/values/libs.xml, so the name has to leave
+# that list as well as the library from the package; Gradle packs it again.
+backend="libplugins_multimedia_androidmediaplugin_arm64-v8a.so"
+pkg="${out}/android-build"
+if [ "${target}" = "arm64_v8a" ]; then
+    sed -i "s/:${backend}//" "${pkg}/res/values/libs.xml"
+    if grep -q "${backend}" "${pkg}/res/values/libs.xml"; then
+        echo "error: ${backend} is still in libs.xml" >&2
+        exit 1
+    fi
+    rm -f "${pkg}/libs/arm64-v8a/${backend}"
+    (cd "${pkg}" && ./gradlew --offline assembleRelease)
+fi
 # the optimised (release) build comes out unsigned: align it and sign it with
 # the debug key (kept in ${tools}) so it installs and updates what is there
 build_tools="${sdk}/build-tools/34.0.0"
