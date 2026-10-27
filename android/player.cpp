@@ -46,6 +46,12 @@ static void nativeCommand(JNIEnv *, jclass, jint what, jlong argument) {
             [what, argument] { g_engine->handleCommand(what, argument); },
             Qt::QueuedConnection);
 }
+
+static void nativeLog(JNIEnv *env, jclass, jstring line) {
+    const char *chars = env->GetStringUTFChars(line, nullptr);
+    qInfo("%s", chars);
+    env->ReleaseStringUTFChars(line, chars);
+}
 #endif
 
 Player::Player(QObject *parent)
@@ -133,7 +139,9 @@ Player::Player(QObject *parent)
     QJniEnvironment env;
     env.registerNativeMethods(
         "org/musicplayer/player/PlaybackService",
-        {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)}});
+        {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)},
+         {"log", "(Ljava/lang/String;)V",
+          reinterpret_cast<void *>(nativeLog)}});
 #endif
     connect(&m_poll, &QTimer::timeout, this, [this] {
         qint64 p = m_engine->position, d = m_engine->duration;

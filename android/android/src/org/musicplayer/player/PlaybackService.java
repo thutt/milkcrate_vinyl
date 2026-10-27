@@ -49,6 +49,8 @@ public class PlaybackService extends Service {
 
     /** Implemented in C++ (player.cpp): a button was pressed. */
     public static native void command(int what, long argument);
+    // one line for milkcrate-log.txt
+    public static native void log(String line);
 
     private static int R_STAR_DOWN,
         R_STAR_UP;  // drawable ids, looked up by name (this file is built
@@ -69,7 +71,18 @@ public class PlaybackService extends Service {
     // are ignored: they come and go with calls and the like.
     private final AudioDeviceCallback outputs = new AudioDeviceCallback() {
         @Override
+        public void onAudioDevicesAdded(AudioDeviceInfo[] added) {
+            for (AudioDeviceInfo device : added)
+                if (device.isSink())
+                    note("output added: " + describe(device));
+            report("output added");
+        }
+
+        @Override
         public void onAudioDevicesRemoved(AudioDeviceInfo[] removed) {
+            for (AudioDeviceInfo device : removed)
+                if (device.isSink())
+                    note("output removed: " + describe(device));
             for (AudioDeviceInfo device : removed) {
                 if (!device.isSink() || !external(device.getType())) continue;
                 pauseForOutput("output removed, type " + device.getType());
@@ -77,6 +90,65 @@ public class PlaybackService extends Service {
             }
         }
     };
+
+    // The music volume changed (the phone's buttons, the head unit, or the
+    // system when a Bluetooth device connects).
+    private final BroadcastReceiver volume = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            int stream = intent.getIntExtra(
+                "android.media.EXTRA_VOLUME_STREAM_TYPE", -1);
+            if (stream != AudioManager.STREAM_MUSIC) return;
+            report("music volume changed to " + intent.getIntExtra(
+                "android.media.EXTRA_VOLUME_STREAM_VALUE", -1));
+        }
+    };
+
+    private static void note(String line) {
+        Log.i("MilkcrateVinyl", line);
+        try {
+            log(line);
+        } catch (UnsatisfiedLinkError e) { /* the C++ side is not loaded yet */
+        }
+    }
+
+    private static String describe(AudioDeviceInfo device) {
+        return "type " + device.getType() + " \"" + device.getProductName()
+            + "\"";
+    }
+
+    // The music volume the system holds and the outputs it can use, to find
+    // out why the sound is sometimes very quiet over Bluetooth.  The dB value
+    // is what the system maps the current volume step to for that output.
+    public static void report(Context context, String why) {
+        report(context.getSystemService(AudioManager.class), why);
+    }
+
+    private void report(String why) {
+        report(audioManager, why);
+    }
+
+    private static void report(AudioManager audio, String why) {
+        StringBuilder text = new StringBuilder("audio (" + why + "): music ");
+        int step = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+        text.append(step).append(" of ")
+            .append(audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+        if (audio.isStreamMute(AudioManager.STREAM_MUSIC))
+            text.append(" (muted)");
+        text.append(", mode ").append(audio.getMode());
+        for (AudioDeviceInfo device :
+             audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            if (!external(device.getType())) continue;
+            text.append("; ").append(describe(device));
+            try {
+                text.append(String.format(
+                    " %.1f dB", audio.getStreamVolumeDb(
+                        AudioManager.STREAM_MUSIC, step, device.getType())));
+            } catch (RuntimeException e) { /* not known for this output */
+            }
+        }
+        note(text.toString());
+    }
 
     private static boolean external(int type) {
         switch (type) {
@@ -185,6 +257,13 @@ public class PlaybackService extends Service {
         registerReceiver(
             noisy,
             new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+        try {
+            registerReceiver(volume, new IntentFilter(
+                "android.media.VOLUME_CHANGED_ACTION"));
+        } catch (RuntimeException e) {
+            Log.w("MilkcrateVinyl", "volume changes not logged: " + e);
+        }
+        report("service started");
     }
 
     private static void send(int what, long argument) {
@@ -336,6 +415,10 @@ public class PlaybackService extends Service {
     public void onDestroy() {
         audioManager.unregisterAudioDeviceCallback(outputs);
         unregisterReceiver(noisy);
+        try {
+            unregisterReceiver(volume);
+        } catch (RuntimeException e) { /* it was not registered */
+        }
         if (session != null) {
             session.setActive(false);
             session.release();

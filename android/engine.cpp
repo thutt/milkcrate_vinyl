@@ -504,6 +504,13 @@ void Engine::playCurrent() {
           "gain %.3f", m_leveling ? "on" : "off", m_target,
           m_measured ? "" : "unmeasured ", m_measured ? m_loudness : 0.0,
           m_gain);
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/PlaybackService", "report",
+        "(Landroid/content/Context;Ljava/lang/String;)V",
+        QNativeInterface::QAndroidApplication::context().object(),
+        QJniObject::fromString("song start").object<jstring>());
+#endif
     emit current(t.id, t.title, t.artist, t.album);
     m_rating = -1;
     lap("telling the screen");
