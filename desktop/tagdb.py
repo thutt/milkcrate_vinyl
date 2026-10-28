@@ -310,6 +310,15 @@ class TagDb:
             for k, v in groups.items()
         }
 
+    def set_loudness(self, path: str, loudness: float, peak: float) -> None:
+        # The measured loudness (LUFS) and true peak (dBFS) of one file.
+        with self.con:
+            self.con.execute(
+                "UPDATE media_file SET loudness = ?, peak = ? WHERE id = ?",
+                (loudness, peak, self.ids[path]),
+            )
+        self.load_loudness()
+
     def gain_db(self, path: str, mode: str, target: float) -> float:
         # Gain in dB that brings the file (mode "track") or its album (mode
         # "album") to the target loudness (LUFS);

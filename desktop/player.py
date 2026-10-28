@@ -19,13 +19,20 @@
 # usage: player.py --database DB        (the database is required)
 from __future__ import annotations
 
+import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
 import argparse
+import bisect
+import faulthandler
 import json
 import os
 import random
 import re
+import signal
 import sqlite3
-import sys
 from types import SimpleNamespace
 
 from PyQt6.QtCore import (
@@ -87,6 +94,8 @@ from tag_editor import TagEditor
 from bulk_values import change_value
 from phone_review import review_phone_changes
 from phone_sync_dialog import open_sync_dialog
+from range_seek import RangeSeek, clock
+import snippet
 
 COLUMNS = [
     ("Title", "TITLE", 280),
@@ -122,6 +131,9 @@ RELIABILITY_WORDS = {
 LEGACY_COLUMN_COUNT = 12
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 MAX_CONSECUTIVE_ERRORS = 5
+SAMPLES_TAB = 3
+# the song list a tab shows; Library and Playlists use the Library's (0)
+TAB_LIST = {2: 1, SAMPLES_TAB: 2}
 # a play is recorded once more than this much of a track has actually been heard
 PLAY_COUNTS_AFTER_MS = 20_000
 MAX_STEP_MS = 1500  # position jumps bigger than this are seeks, not listening
@@ -256,6 +268,14 @@ class LibraryModel(QAbstractTableModel):
     def row_of(self, path: str) -> int:
         return self.paths.index(path)
 
+    def add_path(self, path: str) -> None:
+        # A file was added to the database (kept in path order, as there).
+        row = bisect.bisect_left(self.paths, path)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self.paths.insert(row, path)
+        self._index(path)
+        self.endInsertRows()
+
     def refresh(self, paths: list[str]) -> None:
         # Tags of these files changed in the database.
         for path in paths:
@@ -297,9 +317,11 @@ class LibraryProxy(QAbstractProxyModel):
         if old is not None:
             old.dataChanged.disconnect(self._source_changed)
             old.modelReset.disconnect(self._source_reset)
+            old.rowsInserted.disconnect(self._source_inserted)
         super().setSourceModel(model)
         model.dataChanged.connect(self._source_changed)
         model.modelReset.connect(self._source_reset)
+        model.rowsInserted.connect(self._source_inserted)
         self._arrange()
         self.endResetModel()
 
@@ -307,6 +329,27 @@ class LibraryProxy(QAbstractProxyModel):
         self.beginResetModel()
         self._arrange()
         self.endResetModel()
+
+    def _source_inserted(self, _parent, first, last) -> None:
+        # Rows were added to the source: the rows after them move down, and
+        # the selection stays where it was.
+        count = last - first + 1
+        self.layoutAboutToBeChanged.emit()
+        old = self.persistentIndexList()
+        kept = []
+        for i in old:
+            row = self._rows[i.row()]
+            kept.append((row + count if row >= first else row, i.column()))
+        self._arrange()
+        self.changePersistentIndexList(
+            old,
+            [
+                self.index(self._place[r], c) if r in self._place
+                else QModelIndex()
+                for r, c in kept
+            ],
+        )
+        self.layoutChanged.emit()
 
     def _source_changed(self, top, bottom, roles=()) -> None:
         for row in range(top.row(), bottom.row() + 1):
@@ -574,7 +617,7 @@ class TransportBar(QWidget):
     # What is playing and the controls: one for each tab, so that each tab
     # plays on its own (see MainWindow._activate).
 
-    def __init__(self, parent=None):
+    def __init__(self, samples: bool = False, parent=None):
         super().__init__(parent)
         self.now_playing = QLabel("Nothing playing")
         self.now_playing.setStyleSheet("font-weight: bold")
@@ -604,7 +647,10 @@ class TransportBar(QWidget):
             self.shuffle_button,
         ):
             b.setFixedWidth(44)
-        self.seek = QSlider(Qt.Orientation.Horizontal)
+        # (the Samples tab's bar has two markers on it, for the snippet)
+        self.seek = (
+            RangeSeek() if samples else QSlider(Qt.Orientation.Horizontal)
+        )
         self.time_label = QLabel("0:00 / 0:00")
         self.volume = QSlider(Qt.Orientation.Horizontal)
         self.volume.setRange(0, 100)
@@ -632,6 +678,30 @@ class TransportBar(QWidget):
         layout.addLayout(now_row)
         layout.addWidget(self.section_label)
         layout.addLayout(controls)
+        if samples:
+            self.region_label = QLabel()
+            self.save_button = QPushButton("✂  Save Snippet")
+            self.save_button.setToolTip(
+                "Save the part of the track between the two arrows as a file"
+                " in the folder Track Samples, and add it to the playlist"
+                " Track Samples"
+            )
+            self.save_button.setEnabled(False)
+            # (the bar keeps the keyboard focus, so that the arrow keys move
+            # the marker that was grabbed last)
+            for b in (
+                self.prev_button,
+                self.play_button,
+                self.next_button,
+                self.stop_button,
+                self.shuffle_button,
+                self.save_button,
+            ):
+                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            row = QHBoxLayout()
+            row.addWidget(self.region_label, 1)
+            row.addWidget(self.save_button)
+            layout.addLayout(row)
 
 
 # The state of what a tab is playing, kept while another tab plays.
@@ -674,11 +744,12 @@ class MainWindow(QMainWindow):
     # Library's).
     lst = property(
         lambda self: self.lists[
-            1 if getattr(self, "tabs", None) and self.tabs.currentIndex() == 2
+            TAB_LIST.get(self.tabs.currentIndex(), 0)
+            if getattr(self, "tabs", None)
             else 0
         ]
     )
-    play_lst = property(lambda self: self.lists[1 if self.active == 2 else 0])
+    play_lst = property(lambda self: self.lists[TAB_LIST.get(self.active, 0)])
     table = property(lambda self: self.lst.table)
     proxy = property(lambda self: self.lst.proxy)
     search = property(lambda self: self.lst.search)
@@ -777,6 +848,7 @@ class MainWindow(QMainWindow):
             player.durationChanged.connect(lambda d: self.seek.setRange(0, d))
             player.errorOccurred.connect(self._player_error)
             self._sound = (audio, player)
+            self._volume_applied = 0.7
             self._apply_volume()
         return self._sound
 
@@ -835,9 +907,10 @@ class MainWindow(QMainWindow):
         self.rating_column = next(
             i for i, c in enumerate(COLUMNS) if c[1] == "@rating"
         )
-        # Two song lists, entirely separate: the Library tab's and the Tags
-        # tab's, each with its own search, sort, columns and selection.
-        self.lists = [self._make_song_list(), self._make_song_list()]
+        # Three song lists, entirely separate: the Library tab's, the Tags
+        # tab's and the Samples tab's, each with its own search, sort, columns
+        # and selection.
+        self.lists = [self._make_song_list() for _ in range(3)]
 
         # -- playback --
         self.leveling, self.leveling_target = (
@@ -845,6 +918,8 @@ class MainWindow(QMainWindow):
             -18.0,
         )  # volume leveling: off / track / album, target in LUFS
         self._sound: tuple | None = None  # (audio output, media player)
+        self._volume_applied: float | None = None  # what the output has now
+        self._region_stopping = False
         # Some files never start (see _check_stalled_start).
         self.stalled_ms, self.start_kicks = 0, 0
         self.stall_timer = QTimer(self)
@@ -853,7 +928,12 @@ class MainWindow(QMainWindow):
         self.stall_timer.start()
 
 
-        self.bars = [TransportBar(), TransportBar(), TransportBar()]
+        self.bars = [
+            TransportBar(),
+            TransportBar(),
+            TransportBar(),
+            TransportBar(samples=True),
+        ]
         self.active = 0  # the tab whose bar plays
         self.decks = [self._new_deck() for _ in self.bars]
         self._pending_seek: int | None = None
@@ -885,6 +965,12 @@ class MainWindow(QMainWindow):
             bar.volume.valueChanged.connect(
                 lambda v, i=i: self._volume_moved(i, v)
             )
+        samples = self.bars[SAMPLES_TAB]
+        samples.seek.regionChanged.connect(
+            lambda *_: self._update_samples_bar()
+        )
+        samples.seek.regionReleased.connect(self._region_released)
+        samples.save_button.clicked.connect(self.save_snippet)
 
         # the library: the search box and the song list
         library_page = self.lists[0].pane
@@ -922,8 +1008,13 @@ class MainWindow(QMainWindow):
         # Each tab has what is playing and the controls of its own, below its
         # content, and plays on its own.
         for page, name, bar in zip(
-            (library_page, self.playlist_panel, self.tags_split),
-            ("&Library", "&Playlists", "&Tags"),
+            (
+                library_page,
+                self.playlist_panel,
+                self.tags_split,
+                self.lists[2].pane,
+            ),
+            ("&Library", "&Playlists", "&Tags", "&Samples"),
             self.bars,
         ):
             holder = QWidget()
@@ -1005,7 +1096,7 @@ class MainWindow(QMainWindow):
             elif self._sound:
                 self.player.stop()
                 self._pending_seek = None
-            self._apply_volume()
+            QTimer.singleShot(0, self._apply_volume)
             self._update_rating_bar()
             self.play_button.setText("▶")
             self._update_shuffle_lock()
@@ -1114,7 +1205,7 @@ class MainWindow(QMainWindow):
         return self.model.paths[proxy.mapToSource(proxy.index(row, 0)).row()]
 
     def play_index(self, index, lst) -> None:
-        self._activate(2 if lst is self.lists[1] else 0)
+        self._activate({0: 0, 1: 2, 2: SAMPLES_TAB}[self.lists.index(lst)])
         self.errors_in_a_row = 0
         self._end_schedule()
         self.queue, self.queue_playlist = (
@@ -1146,7 +1237,10 @@ class MainWindow(QMainWindow):
             self.pending_skips.remove(
                 path
             )  # back to a skipped track: the skip is cancelled
-        self.skippable = True
+        # (trying out a snippet is not listening: no skip, no play counted)
+        self.skippable = self.active != SAMPLES_TAB
+        if self.active == SAMPLES_TAB and path != self.playing:
+            self.seek.reset_region()  # a new track: all of it
         self.playing = path
         if record:
             self.heard.add(path)
@@ -1172,6 +1266,7 @@ class MainWindow(QMainWindow):
         artist = SEPARATOR.join(tags.get("ARTIST", []))
         self.now_playing.setText(f"{title} — {artist}" if artist else title)
         self._update_rating_bar()
+        self._update_samples_bar()
         self.statusBar().clearMessage()
 
     def _row_in_view(self, path: str) -> int:
@@ -1276,8 +1371,9 @@ class MainWindow(QMainWindow):
             self.player.stop()
 
     def previous(self) -> None:
-        if self.player.position() > 3000:
-            self.player.setPosition(0)
+        floor = self.seek.region()[0] if self.active == SAMPLES_TAB else 0
+        if self.player.position() > floor + 3000:
+            self.player.setPosition(floor)
             return
         if self.shuffle_button.isChecked():
             sequence = self._sequence()
@@ -1542,6 +1638,8 @@ class MainWindow(QMainWindow):
         if state == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
         elif state == QMediaPlayer.PlaybackState.PausedState:
+            if self.active == SAMPLES_TAB:
+                self._enter_region()
             self.player.play()
         else:
             self.errors_in_a_row = 0
@@ -1565,7 +1663,10 @@ class MainWindow(QMainWindow):
 
     def _media_status(self, status) -> None:
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            self.next()
+            if self.active == SAMPLES_TAB:
+                self._region_done()
+            else:
+                self.next()
         elif status == QMediaPlayer.MediaStatus.BufferedMedia:
             self.errors_in_a_row = 0
         if (
@@ -1602,6 +1703,9 @@ class MainWindow(QMainWindow):
     def _count_listening(self, position: int) -> None:
         # Add up the time actually heard; once it passes the threshold, record
         # the play (once per start).
+        if self.active == SAMPLES_TAB:
+            self.last_position = None
+            return
         playing = (
             self.player.playbackState()
             == QMediaPlayer.PlaybackState.PlayingState
@@ -1696,8 +1800,107 @@ class MainWindow(QMainWindow):
         self._count_listening(position)
         if not self.seek.isSliderDown():
             self.seek.setValue(position)
+        if self.active == SAMPLES_TAB and not self._switching:
+            self._keep_in_region(position)
         self.time_label.setText(
             f"{fmt_time(position)} / {fmt_time(self.player.duration())}"
+        )
+
+    # -- the Samples tab ---------------------------------------------------
+
+    def _samples_path(self) -> str | None:
+        # The track of the Samples tab, whether or not that tab plays now.
+        if self.active == SAMPLES_TAB:
+            return self.playing
+        return self.decks[SAMPLES_TAB]["playing"]
+
+    def _update_samples_bar(self) -> None:
+        bar = self.bars[SAMPLES_TAB]
+        start, end = bar.seek.region()
+        bar.region_label.setText(
+            f"Snippet length {clock(end - start)}   (from {clock(start)}"
+            f" to {clock(end)})"
+            if self._samples_path() is not None
+            else "Play a track, then drag the two arrows to choose a snippet"
+        )
+        bar.save_button.setEnabled(
+            self._samples_path() is not None
+            and end - start >= snippet.MIN_LENGTH_MS
+        )
+
+    def _region_released(self) -> None:
+        # A marker was let go: the music goes inside the region.
+        if self.active == SAMPLES_TAB and self._sound:
+            self._enter_region()
+
+    def _enter_region(self) -> None:
+        start, end = self.seek.region()
+        position = self.player.position()
+        if position < start or position >= end:
+            self.player.setPosition(start)
+
+    def _keep_in_region(self, position: int) -> None:
+        # Only the region plays: at its end the music pauses at the start of
+        # the region, ready to play it again.
+        if (
+            self.player.playbackState()
+            != QMediaPlayer.PlaybackState.PlayingState
+        ):
+            return
+        start, end = self.seek.region()
+        if position >= end:
+            self._stop_region()
+        elif position < start:
+            self.player.setPosition(start)
+
+    def _stop_region(self) -> None:
+        # Pause at the end of the region; from the event loop, not inside
+        # the handler of the player's own signal (and once, though the player
+        # reports its position several times before it has paused).
+        if not self._region_stopping:
+            self._region_stopping = True
+            QTimer.singleShot(0, self._pause_at_start)
+
+    def _pause_at_start(self) -> None:
+        # The bar goes back to the start of the region; the player is only
+        # paused (a seek straight after a pause is what the Samples tab did
+        # that no other tab does).  Play moves it to the start (see
+        # _enter_region).
+        self._region_stopping = False
+        if self.active == SAMPLES_TAB and self._sound:
+            self.player.pause()
+            self.seek.setValue(self.seek.region()[0])
+
+    def _region_done(self) -> None:
+        # The track ended inside the region (the end marker is at its end).
+        self._stop_region()
+
+    def save_snippet(self) -> None:
+        path = self._samples_path()
+        start, end = self.bars[SAMPLES_TAB].seek.region()
+        if path is None or end - start < snippet.MIN_LENGTH_MS:
+            self.statusBar().showMessage(
+                "Play a track in the Samples tab and move the two arrows"
+                " apart first.",
+                8000,
+            )
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            rel, playlist = snippet.save(self.db, self.root, path, start, end)
+        except snippet.SnippetError as e:
+            QMessageBox.warning(self, "Cannot save the snippet", str(e))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.model.add_path(rel)
+        # (the Playlists tab shows the playlist, so Play there plays it)
+        self.playlist_panel.refresh(select=playlist)
+        self._playlist_changed(playlist)
+        self._update_status()
+        self.statusBar().showMessage(
+            f"Saved {rel} and added it to the playlist {snippet.PLAYLIST}.",
+            10000,
         )
 
     # -- tag editing -------------------------------------------------------
@@ -1850,11 +2053,14 @@ class MainWindow(QMainWindow):
         self.save_action = add(
             menu, "&Save Tags", QKeySequence.StandardKey.Save, self.save
         )
+        add(menu, "Save S&nippet", None, self.save_snippet)
         add(menu, "S&ync with Phone...", None, self.sync_phone)
         add(menu, "&Review Phone Changes...", None, self.review_phone)
         add(menu, "&Quit", QKeySequence.StandardKey.Quit, self.close)
         menu = self.menuBar().addMenu("&View")
-        for number, name in enumerate(("Library", "Playlists", "Tags")):
+        for number, name in enumerate(
+            ("Library", "Playlists", "Tags", "Samples")
+        ):
             add(
                 menu,
                 f"Show {name}",
@@ -1969,9 +2175,18 @@ class MainWindow(QMainWindow):
             if self.playing
             else 0.0
         )
-        self.audio.setVolume(
+        volume = (
             min(1.0, self.volume.value() / 100 * 10 ** (gain / 20)) * self.fade
         )
+        # (Qt's audio output can stop responding when its volume is set while
+        # the player is being switched; so it is set only when it changes)
+        if (
+            self._volume_applied is not None
+            and abs(volume - self._volume_applied) < 1e-4
+        ):
+            return
+        self._volume_applied = volume
+        self.audio.setVolume(volume)
 
     def _set_leveling(self, mode: str) -> None:
         self.leveling = mode
@@ -2144,7 +2359,7 @@ class MainWindow(QMainWindow):
         if geometry is not None:
             self.restoreGeometry(geometry)
         self.tabs.setCurrentIndex(
-            min(max(settings.value("tab", 0, type=int), 0), 2)
+            min(max(settings.value("tab", 0, type=int), 0), SAMPLES_TAB)
         )
         self.shuffle_button.setChecked(
             settings.value("shuffle", False, type=bool)
@@ -2165,6 +2380,10 @@ class MainWindow(QMainWindow):
         self._apply_columns(
             self._saved_columns(settings, "tags_column_layout"), self.lists[1]
         )
+        self._apply_columns(
+            self._saved_columns(settings, "samples_column_layout"),
+            self.lists[2],
+        )
         if settings.contains(
             "volume"
         ):  # (value() with a type gives 0 when the setting is missing)
@@ -2180,6 +2399,10 @@ class MainWindow(QMainWindow):
         settings.setValue(
             "tags_column_layout",
             json.dumps(self._column_layout(self.lists[1])),
+        )
+        settings.setValue(
+            "samples_column_layout",
+            json.dumps(self._column_layout(self.lists[2])),
         )
         settings.remove("columns")  # the old, count-dependent format
         settings.remove("column_count")
@@ -2232,6 +2455,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    # When the window stops responding, `kill -USR1 <pid>` prints on the
+    # terminal where each thread of the player is.
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     app = QApplication([sys.argv[0]] + qt_args)
     window = MainWindow(TagDb(path))
     window.show()

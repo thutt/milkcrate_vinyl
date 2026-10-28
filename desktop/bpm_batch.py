@@ -27,9 +27,13 @@
 # database as bpm-detect-journal.jsonl.
 from __future__ import annotations
 
+import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
 import argparse
 import os
-import sys
 import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor

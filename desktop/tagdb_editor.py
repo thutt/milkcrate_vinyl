@@ -16,11 +16,15 @@
 # usage: tagdb_editor.py --database DB        (the database is required)
 from __future__ import annotations
 
+import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
 import argparse
 import os
 import re
 import sqlite3
-import sys
 import time
 
 from PyQt6.QtCore import (

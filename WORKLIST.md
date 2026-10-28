@@ -46,14 +46,29 @@
   root (a sample is enough), so a root one folder too deep or too shallow is
   caught.  Same check for the phone app: one message when the library folder
   is missing instead of a "Not on this device" for each song.
-- [ ] **Desktop: copy a snippet of a track to a file (requested 2026-10-27):**
-  save a chosen part of a track as its own audio file, for example to use as a
-  ringtone.  Never touches the original file or the database.  Open
-  decisions: how the start and end are chosen (type times, or mark them while
-  the track plays; a short preview before saving); the output format (a
-  ringtone is usually MP3 or M4A/AAC, and a phone has a length limit); optional
-  fade in and out; where the file is saved; whether the tags are copied.
-  ffmpeg is already a prerequisite, so it can do the cutting.
+- [x] **Desktop: Samples tab, save a snippet of a track (requested and built 2026-10-27):**
+  a fourth player tab with its own song list and a position bar with two
+  draggable arrows (`desktop/range_seek.py`; start arrow points right, end arrow
+  points left; the end is never before the start; Play plays only the region).
+  "Save Snippet" (or File > Save Snippet) copies the region with ffmpeg into
+  `Track Samples/` under the music root, in the file type of the donor
+  (`desktop/snippet.py`, no re-encoding), adds it to the database (title
+  "<title> (sample 0:30-1:05)", album "Track Samples", loudness measured) and to
+  the static playlist "Track Samples", made when missing.  The next phone sync
+  copies it like any file of the database.  Floating time labels sit above
+  the start arrow and below the end arrow; the length shows under the bar and,
+  while an arrow is held, in the middle of the shaded part.  The arrow grabbed
+  last is outlined and the Left/Right keys move it 0.1 s (the bar keeps the
+  keyboard focus; the Samples bar's buttons take none).
+  Tested headless on a copy of the database with generated MP3, FLAC and M4A
+  tracks.  Tried by hand (2026-10-27): creating a snippet, playing it in the Samples
+  tab and from the Playlists tab (after the player stopped responding in
+  Qt's audio output when Play in the Playlists tab took over from the Samples
+  tab; the volume is now set only when it changes and not inside the tab
+  switch, and the region stops from the event loop).  Not tried: a real sync of
+  a snippet to the phone.  Open: whether the
+  end arrow should point right as the request said (it points left now);
+  whether dynamic playlists should skip the album "Track Samples".
 
 ## Proposed, not yet confirmed
 

@@ -29,10 +29,14 @@
 # sync_phone.py.
 from __future__ import annotations
 
+import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
 import argparse
 import os
 import sqlite3
-import sys
 from phone_adb import adb, on_phone
 from phone_files import copy_files, manifest
 

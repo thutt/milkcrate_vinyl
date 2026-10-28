@@ -106,3 +106,11 @@ Storage
 A playlist is a row in the playlist table (name, creation time; no
 rules).  Each entry is a row in playlist_item (playlist, position,
 song).  Deleting a playlist or a library song deletes its entries.
+
+The playlist "Track Samples"
+----------------------------
+
+The player's Samples tab (10) makes this playlist itself, the first time
+a snippet is saved, and adds every snippet to it.  It is an ordinary
+static playlist: it can be played, reordered, renamed or emptied.  If it
+is renamed, the next snippet makes a new one.

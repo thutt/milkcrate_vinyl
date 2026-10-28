@@ -25,11 +25,15 @@
 # copied to <database>.bak-before-init first.
 from __future__ import annotations
 
+import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
 import argparse
 import os
 import shutil
 import sqlite3
-import sys
 from datetime import datetime, timezone
 
 import schema

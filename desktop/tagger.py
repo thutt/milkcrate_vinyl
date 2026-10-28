@@ -8,8 +8,12 @@
 # Standalone editor for the tags inside media files (no database).
 from __future__ import annotations
 
-import os
 import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
+import os
 
 from PyQt6.QtCore import (
     QItemSelection,

@@ -15,6 +15,10 @@ if there is no card (see 09).  Syncing puts both there, and brings the
 plays and ratings made on the phone back to the desktop.  The same
 operation is used for the first copy and for later updates.
 
+Snippets saved in the player's Samples tab (10) are files of the database
+like any other, in the folder Track Samples of the music folder, so the
+next sync copies them too.
+
 Install the app first (09).
 
 Wi-Fi sync from the player or editor

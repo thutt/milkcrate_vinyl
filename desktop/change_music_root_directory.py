@@ -16,9 +16,13 @@
 # editor before running it.
 from __future__ import annotations
 
+import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
 import argparse
 import os
-import sys
 
 from tagdb import TagDb
 

@@ -17,13 +17,17 @@
 # and the database are not changed.  Needs ffprobe (part of ffmpeg).
 from __future__ import annotations
 
+import sys
+
+# a program of its own: it leaves no .pyc files behind
+sys.dont_write_bytecode = True
+
 import argparse
 import json
 import os
 import shutil
 import sqlite3
 import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 
 

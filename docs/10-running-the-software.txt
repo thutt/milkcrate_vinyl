@@ -42,7 +42,7 @@ Player
 
     scripts/play [--database FILE]
 
-The window has three tabs, one for each task:
+The window has four tabs, one for each task:
 
     Library     (Ctrl+1)  the library as a table, one row per song, and
                           the search box; duplicates are hidden unless
@@ -52,6 +52,9 @@ The window has three tabs, one for each task:
     Tags        (Ctrl+3)  a song list of its own, with its search box,
                           on the left and the tag editor on the right
                           (03).  Select the songs to edit in the list.
+    Samples     (Ctrl+4)  a song list of its own, and a position bar with
+                          two markers, to save part of a song as a file
+                          of its own (see "Samples" below).
 
 Each tab has its own "what is playing" line and controls (previous,
 play, next, stop, shuffle, position and volume) at the bottom, and
@@ -63,20 +66,78 @@ Going back to the first tab and pressing Play continues its song from
 the same place, and pauses the other.  So the Library tab can hold a
 song, the Playlists tab a playlist and the Tags tab another song, and
 Play on each one switches between them.  Shuffle and the volume are the
-same in all three tabs.  The Playback menu and its shortcuts work on the
+same in all the tabs.  The Playback menu and its shortcuts work on the
 tab that is shown.
 
-Play in the Library and Tags tabs starts the selected song; in the
+Play in the Library, Tags and Samples tabs starts the selected song; in the
 Playlists tab it starts the selected playlist, from its selected entry
 or its start.
 
-The Library and Tags tabs are entirely separate.  Each has its own song
+The Library, Tags and Samples tabs are entirely separate.  Each has its own song
 list, with its own search, selection, sort order and columns (View >
 Columns changes those of the tab that is shown), and each plays from its
 own list.  Only the Tags tab's selection goes to the tag editor; the
 Library tab's selection is for rating and for the playlist menu.
 
 The window opens on the tab that was open when it was closed.
+
+If the window stops responding, start the player from a terminal and send
+it the signal USR1 from another terminal:
+
+    pkill -USR1 -f desktop/player.py
+
+The player writes on the first terminal where each of its threads is (the
+lines of the program each one is in), and keeps running.  Send that text
+with the report of the problem, then end the player with Ctrl+C or kill.
+
+Samples
+-------
+
+The Samples tab saves a snippet, a part of a song, as a file of its own,
+for example to use as a ringtone.  It is a Library tab with a different
+position bar.
+
+  1. Select a song and press Play (or double-click it).
+  2. The bar shows two arrows.  Drag the left arrow, which points right,
+     to where the snippet starts, and the right arrow, which points left,
+     to where it ends.  Both arrows start at the ends of the song.  The
+     start can be anywhere from 0 to the end arrow; the end is never
+     before the start.  A label floats above the left arrow with the
+     time of the start, and one below the right arrow with the time of
+     the end, and they follow the arrows as they are dragged.  Being on
+     opposite sides, they never cover each other, however close the arrows
+     are.  While an arrow is held, the length of the snippet also shows in
+     the middle of the shaded part.  The length is always shown under the
+     bar, with the start and the end.  The arrow that was taken hold of
+     last is outlined; while the bar has the keyboard focus (click on it
+     or on an arrow; the buttons do not take the focus away), the Left and
+     Right arrow keys move that arrow by a tenth of a second, within the
+     same limits.  Taking hold of an arrow does not move it, so it can be
+     chosen and then set with the keys.
+  3. Play plays only the part between the arrows.  At the end arrow the
+     music pauses and waits at the start arrow, and Play plays the part
+     again.  The position handle stays between the arrows.  Previous goes
+     back to the start arrow.  Choosing another song puts both arrows at
+     the ends again.
+  4. Click "Save Snippet" under the bar (or File > Save Snippet).  The
+     message line names the file.
+
+The snippet is saved in the same file type as the song (the audio is
+copied, not encoded again, so the sound is the same and no quality is
+lost); a song in FLAC gives a snippet in FLAC.  The files are kept in the
+folder "Track Samples" in the music folder, named like the song with
+"(sample 0m30s-1m05s)" added.  The snippet is added to the database as a
+track of its own, with the title "<title> (sample 0:30-1:05)", the album
+"Track Samples" and no track number, so it is not taken for a copy of the
+song (plays of one are not counted for the other).  Its loudness is
+measured, and it is added to the static playlist "Track Samples", which is
+made the first time (04).  The next sync copies it to the phone (11).
+The song itself is never changed.
+
+Trying out a snippet is not listening: it counts no play and does not
+make a song leave a dynamic playlist.  The snippet ends within about a
+tenth of a second of the arrow when it plays here; the saved file is cut
+at the exact time, to the nearest frame of the file type.
 
 Playing:
 
