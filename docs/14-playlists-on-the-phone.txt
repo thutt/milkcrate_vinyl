@@ -79,7 +79,10 @@ the database holds it at that moment, not from a copy made at the start.
 What the screen shows as coming up is therefore what plays.  In order,
 the next song is the first one after the current song's place in the
 list; with shuffle on it is any song of the list not yet played.  A song
-is played once in a round, whether it was heard or skipped.  Changes to
+is played once in a round, whether it was heard or skipped.  Next on the
+last song of the list is a skip like any other: the song leaves the list
+when a later song counts, and the list starts again from its first song
+after a few seconds.  Changes to
 the list meanwhile (replacements, a sync) take effect with the next
 song.  When no song is left, the app reads the list again after a few
 seconds, once the replacements are in, and starts a new round.  If the

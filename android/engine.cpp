@@ -596,7 +596,9 @@ void Engine::next() {
             // nothing on the list is left to play: the played songs have left
             // it and others are coming in, so look again shortly
             qInfo("nothing left to play on the playlist: reading it again");
-            m_skippable = false;
+            // A song left with Next is a skip even when it was the last on the
+            // list; one that ended by itself is not.
+            m_skippable = m_skippable && !m_naturalEnd;
             m_queueEnded = true;
             m_endClock.start();
             m_player->stop();
