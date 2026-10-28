@@ -56,7 +56,9 @@ QVector<QueueItem> entriesOf(QSqlDatabase db, qint64 playlistId) {
               "(SELECT value FROM tag WHERE file_id = m.id AND name = 'ARTIST' "
               "AND pos = 0), "
               "(SELECT value FROM tag WHERE file_id = m.id AND name = 'ALBUM' "
-              "AND pos = 0), i.pos, m.rating "
+              "AND pos = 0), i.pos, m.rating, "
+              "(SELECT group_concat(value, char(10)) FROM tag WHERE file_id = "
+              "m.id AND name = 'GENRE') "
               "FROM playlist_item i JOIN media_file m ON m.id = i.file_id "
               "WHERE i.playlist_id = ?" +
               QString(hasRemovedMark(db) ? " AND i.removed_at IS NULL" : "") +
@@ -74,6 +76,8 @@ QVector<QueueItem> entriesOf(QSqlDatabase db, qint64 playlistId) {
         t.album = q.value(5).toString();
         t.pos = q.value(6).toLongLong();
         t.rating = q.value(7).isNull() ? -1 : q.value(7).toInt();
+        if (!q.value(8).isNull())
+            t.genres = q.value(8).toString().split('\n', Qt::SkipEmptyParts);
         if (t.title.isEmpty()) {
             int slash = t.path.lastIndexOf('/'), dot = t.path.lastIndexOf('.');
             t.title = t.path.mid(slash + 1, dot > slash ? dot - slash - 1 : -1);

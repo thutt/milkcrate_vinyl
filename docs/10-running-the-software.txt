@@ -131,7 +131,8 @@ track of its own, with the title "<title> (sample 0:30-1:05)", the album
 "Track Samples" and no track number, so it is not taken for a copy of the
 song (plays of one are not counted for the other).  Its loudness is
 measured, and it is added to the static playlist "Track Samples", which is
-made the first time (04).  The next sync copies it to the phone (11).
+made the first time (04).  The next sync copies it to the phone, into the
+library and into the Ringtones folder (11).
 The song itself is never changed.
 
 Trying out a snippet is not listening: it counts no play and does not

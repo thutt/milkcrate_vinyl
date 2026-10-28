@@ -164,8 +164,12 @@ public:
     void reloadPlaylists();  // after a play was recorded: dynamic lists lose
                              // the track
     void showBpm(qint64 id);  // the beat of the bars
-    void refreshStats();     // plays of each song, for the Songs tab
-    void countMatched();     // library tracks matched by each dynamic playlist
+    // Read in the background, in one pass over the library: the plays of each
+    // song (the Songs tab), the library tracks each dynamic playlist selects,
+    // and, for the open playlist, its entries and why it chose them.  One at
+    // a time: a request that arrives meanwhile is answered when it is done.
+    // lists: the list of playlists is read again too.
+    void refreshInfo(bool lists);
                              // (background)
     void resumeCurrent();
     Q_INVOKABLE void moveToBack();  // the phone's Back at the top level: hide
@@ -221,6 +225,9 @@ private:
     bool m_syncRunning = false;
     QString m_syncCode, m_syncAddresses, m_syncStatus;
     QTimer m_poll;  // position and duration, a few times a second
+    QTimer m_reloadTimer;  // after a play: the plays of one song change
+                           // several things; the lists are read once
+    bool m_infoBusy = false, m_infoAgain = false, m_infoListsAgain = false;
     qint64 m_lastPosition = -1, m_lastDuration = -1;
     QSettings m_settings;
     QString m_dbPath, m_root, m_message;

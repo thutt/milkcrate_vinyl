@@ -393,6 +393,19 @@ class SyncDialog(QDialog):
                 else 0
             )
             if not self.stop.is_set():
+                # the track samples go into the Ringtones folder as well
+                failed = (
+                    phone_files.copy_ringtones(
+                        link,
+                        files,
+                        2,
+                        log,
+                        self.stop.is_set,
+                        self.job.progress.emit,
+                    )
+                    or failed
+                )
+            if not self.stop.is_set():
                 try:
                     link.done()
                 except phone_link.LinkError:

@@ -19,7 +19,10 @@
 //   database; refused (409) when the app wrote to the database after the copy
 //   was taken GET  /files        every file under the music folder with its
 //   size, as a JSON object PUT  /file/<path>  one music file (written as
-//   <path>.part, then renamed) POST /done         the desktop has finished
+//   <path>.part, then renamed) GET  /ringtones    the files in the phone's
+//   Ringtones folder, with their sizes PUT  /ringtone/<name>  one file for the
+//   Ringtones folder (a name, no folders; the media scanner is told of it)
+//   POST /done         the desktop has finished
 // It runs in its own thread, like the playback engine, so it keeps going while
 // the phone is locked.
 #pragma once
@@ -51,6 +54,6 @@ private:
     QTcpServer *m_server = nullptr;
     QUdpSocket *m_discovery = nullptr;
     QString m_db, m_root, m_code;
-    int m_failures = 0, m_files = 0;
+    int m_failures = 0, m_files = 0, m_ringtones = 0;
     qint64 m_bytes = 0;
 };

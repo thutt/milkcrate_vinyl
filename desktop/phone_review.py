@@ -7,7 +7,9 @@
 #
 # Lists the songs whose plays and ratings came from the phone in a sync, so
 # that they can be rated or corrected at the desktop; a song played while
-# driving can be rated later.
+# driving can be rated later.  Apply stores the ratings given and takes the
+# rated songs off the list, leaving the window open for the songs still to
+# rate; Finish stores what is left and closes the window.
 from __future__ import annotations
 
 from PyQt6.QtCore import QEvent, QRect, Qt
@@ -102,6 +104,7 @@ class PhoneReview(QDialog):
         for path, rating, plays, last in report.changes:
             before.setdefault(path, (rating, plays))  # the first round's
         self.paths = [p for p in before if p in db.tags]
+        self.total = len(self.paths)
         self.before = before
         self.pending: dict[str, int | None] = {}  # ratings given, not stored
         layout = QVBoxLayout(self)
@@ -140,19 +143,32 @@ class PhoneReview(QDialog):
             QLabel(
                 "Click the stars, or select songs and press 0 to 5 "
                 "(Delete: not rated).  Apply stores the ratings, which go "
-                "to the phone at the next sync; Cancel discards them."
+                "to the phone at the next sync, and takes the rated songs "
+                "off the list; Finish stores the ratings and closes the "
+                "window; Cancel closes it and discards the ratings not "
+                "applied."
             )
         )
         row = QHBoxLayout()
         row.addStretch()
         apply = QPushButton("Apply")
         apply.setDefault(True)
-        apply.setToolTip("Store the ratings given here and close")
-        apply.clicked.connect(self.accept)
+        apply.setToolTip(
+            "Store the ratings given here and take the rated songs off the"
+            " list"
+        )
+        apply.clicked.connect(self.apply)
+        finish = QPushButton("Finish")
+        finish.setToolTip("Store the ratings given here and close the window")
+        finish.clicked.connect(self.accept)
         cancel = QPushButton("Cancel")
-        cancel.setToolTip("Close without storing the ratings given here")
+        cancel.setToolTip(
+            "Close without storing the ratings given here since the last"
+            " Apply"
+        )
         cancel.clicked.connect(self.reject)
         row.addWidget(apply)
+        row.addWidget(finish)
         row.addWidget(cancel)
         layout.addLayout(row)
         self.table.setSortingEnabled(False)
@@ -232,7 +248,7 @@ class PhoneReview(QDialog):
         self.table.setSortingEnabled(sorting)
         self.table.viewport().update()
 
-    def accept(self) -> None:
+    def _store(self) -> None:
         by_rating: dict = {}
         for path, rating in self.pending.items():
             by_rating.setdefault(rating, []).append(path)
@@ -240,6 +256,24 @@ class PhoneReview(QDialog):
             self.db.set_ratings(paths, rating)
         if self.pending:
             self.changed(list(self.pending))
+        self.pending = {}
+
+    def apply(self) -> None:
+        # Store the ratings and take every rated song off the list; the
+        # window stays for the songs that are still not rated.
+        self._store()
+        sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        for r in reversed(range(self.table.rowCount())):
+            path = self.table.item(r, 0).data(PATH_ROLE)
+            if self._rating_of(path) is not None:
+                self.table.removeRow(r)
+                self.paths.remove(path)
+        self.table.setSortingEnabled(sorting)
+        self._filter()
+
+    def accept(self) -> None:  # Finish
+        self._store()
         super().accept()
 
     def reject(self) -> None:
@@ -275,8 +309,9 @@ class PhoneReview(QDialog):
             self.table.setRowHidden(r, hide)
             shown += not hide
         self.summary.setText(
-            f"{len(self.paths)} song(s) took plays or a rating from the phone;"
-            f" {unrated} not rated.  Showing {shown}."
+            f"{self.total} song(s) took plays or a rating from the phone;"
+            f" {len(self.paths)} still listed, {unrated} of them not rated."
+            f"  Showing {shown}."
         )
 
 

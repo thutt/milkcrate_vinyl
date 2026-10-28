@@ -287,8 +287,12 @@ QHash<qint64, SongStat> computeSongStats(QSqlDatabase db) {
     return out;
 }
 
-void spreadSongPlays(QSqlDatabase db, QVector<Track> &tracks) {
-    const QHash<qint64, SongStat> stats = computeSongStats(db);
+void spreadSongPlays(QSqlDatabase db, QVector<Track> &tracks,
+                     const QHash<qint64, SongStat> *known = nullptr) {
+    // (the plays of every song are worked out once for several readers)
+    const QHash<qint64, SongStat> own =
+        known ? QHash<qint64, SongStat>() : computeSongStats(db);
+    const QHash<qint64, SongStat> &stats = known ? *known : own;
     for (Track &t : tracks) {
         auto it = stats.constFind(t.id);
         if (it == stats.constEnd()) continue;
@@ -297,8 +301,11 @@ void spreadSongPlays(QSqlDatabase db, QVector<Track> &tracks) {
     }
 }
 
+// only: just these tracks (when they are few, only their tags are read);
+// stats: the plays of every song, when the caller has them already.
 QVector<Track> loadTracks(QSqlDatabase db, const QSet<QString> &ruleFields,
-                          const QSet<qint64> *only = nullptr) {
+                          const QSet<qint64> *only = nullptr,
+                          const QHash<qint64, SongStat> *stats = nullptr) {
     QSet<QString> tagNames = {"ARTIST", "ALBUMARTIST", "ALBUM", "TITLE",
                               "TRACKNUMBER"};
     static const QHash<QString, QString> extra = {
@@ -333,17 +340,23 @@ QVector<Track> loadTracks(QSqlDatabase db, const QSet<QString> &ruleFields,
     }
     QStringList quoted;
     for (const QString &n : tagNames) quoted << "'" + n + "'";
+    QString only_ids;  // a few tracks: read their tags, not everybody's
+    if (only && only->size() <= 500) {
+        QStringList ids;
+        for (qint64 id : *only) ids << QString::number(id);
+        only_ids = " AND file_id IN (" + ids.join(",") + ")";
+    }
     QSqlQuery tq(db);
     tq.setForwardOnly(true);
     tq.exec("SELECT file_id, name, value FROM tag WHERE name IN (" +
-            quoted.join(",") + ") ORDER BY file_id, name, pos");
+            quoted.join(",") + ")" + only_ids + " ORDER BY file_id, name, pos");
     while (tq.next()) {
         auto it = index.constFind(tq.value(0).toLongLong());
         if (it != index.constEnd())
             tracks[*it].tags[tq.value(1).toString()] << tq.value(2).toString();
     }
     if (ruleFields.contains("plays") || ruleFields.contains("last_played"))
-        spreadSongPlays(db, tracks);
+        spreadSongPlays(db, tracks, stats);
     return tracks;
 }
 
@@ -407,22 +420,12 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
     return chooseFrom(tracks, rules, exclude, limit);
 }
 
-// The counts only read, and take no lock: holding it for the whole rule
-// evaluation (over a second on the phone) kept the engine from starting songs.
-QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
-                                     const QList<qint64> &ids) {
-    Connection c(dbPath);
-    if (!c.ok) return {};
-    QSqlQuery q(c.db());
-    q.prepare("SELECT rules FROM playlist WHERE id = ?");
-    q.addBindValue(playlistId);
-    if (!q.exec() || !q.next() || q.value(0).isNull()) return {};
-    const QJsonObject rules =
-        QJsonDocument::fromJson(q.value(0).toString().toUtf8()).object();
-    QSet<QString> fields;
-    collectFields(rules, fields);
+// How a dynamic playlist's rules see some of the tracks: the values they test,
+// one line for each.
+static QHash<qint64, QString> explainWith(const QJsonObject &rules,
+                                          const QVector<Track> &tracks,
+                                          const QSet<qint64> &wanted) {
     const QString sort = rules["sort"].toObject()["field"].toString("random");
-    if (sort != "random") fields.insert(sort);
     QStringList order;  // the fields in the order the rules name them
     std::function<void(const QJsonObject &)> walk = [&](const QJsonObject &g) {
         for (const QJsonValue &item : g["rules"].toArray()) {
@@ -437,12 +440,6 @@ QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
     };
     walk(rules);
     if (sort != "random" && !order.contains(sort)) order << sort;
-    const QSet<qint64> wanted(ids.begin(), ids.end());
-    QElapsedTimer clock;
-    clock.start();
-    QVector<Track> tracks = loadTracks(c.db(), fields, &wanted);
-    qInfo("explain %lld songs of %lld: %lld ms", qint64(tracks.size()),
-          qint64(ids.size()), qint64(clock.elapsed()));
     static const QHash<QString, QString> labels = {
         {"genre", "Genre"},   {"composer", "Composer"}, {"year", "Year"},
         {"bpm", "BPM"},       {"bpm_reliability", "BPM reliability"},
@@ -452,6 +449,7 @@ QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
     const QDateTime now = QDateTime::currentDateTimeUtc();
     QHash<qint64, QString> out;
     for (const Track &t : tracks) {
+        if (!wanted.contains(t.id)) continue;
         QStringList parts;
         for (const QString &f : order) {
             if (!labels.contains(f)) continue;  // title, artist, album, path
@@ -499,6 +497,34 @@ QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
     return out;
 }
 
+
+// The counts only read, and take no lock: holding it for the whole rule
+// evaluation (over a second on the phone) kept the engine from starting songs.
+// stats: the plays of every song, when the caller has them already.
+QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
+                                     const QList<qint64> &ids,
+                                     const QHash<qint64, SongStat> *stats) {
+    Connection c(dbPath);
+    if (!c.ok) return {};
+    QSqlQuery q(c.db());
+    q.prepare("SELECT rules FROM playlist WHERE id = ?");
+    q.addBindValue(playlistId);
+    if (!q.exec() || !q.next() || q.value(0).isNull()) return {};
+    const QJsonObject rules =
+        QJsonDocument::fromJson(q.value(0).toString().toUtf8()).object();
+    QSet<QString> fields;
+    collectFields(rules, fields);
+    const QString sort = rules["sort"].toObject()["field"].toString("random");
+    if (sort != "random") fields.insert(sort);
+    const QSet<qint64> wanted(ids.begin(), ids.end());
+    QElapsedTimer clock;
+    clock.start();
+    QVector<Track> tracks = loadTracks(c.db(), fields, &wanted, stats);
+    qInfo("explain %lld songs of %lld: %lld ms", qint64(tracks.size()),
+          qint64(ids.size()), qint64(clock.elapsed()));
+    return explainWith(rules, tracks, wanted);
+}
+
 int countMatches(const QString &dbPath, qint64 playlistId) {
     Connection c(dbPath);
     if (!c.ok) return -1;
@@ -539,14 +565,56 @@ QHash<qint64, int> countAllMatches(const QString &dbPath) {
     return counts;
 }
 
-int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
-    QMutexLocker lock(&dbLock());
+// What the lists on the screen need to know about the dynamic playlists after
+// a play, from one pass over the library: how many tracks every list's rules
+// select, why the open playlist chose its entries, and every song's plays.
+DynamicInfo dynamicInfo(const QString &dbPath, qint64 openId,
+                        const QList<qint64> &openIds) {
+    DynamicInfo info;
     Connection c(dbPath);
-    if (!c.ok) {
-        if (problem) *problem = c.error;
-        return 0;
+    if (!c.ok) return info;
+    info.stats = computeSongStats(c.db());
+    QSqlQuery q(c.db());
+    if (!q.exec("SELECT id, rules FROM playlist WHERE rules IS NOT NULL"))
+        return info;
+    QVector<QPair<qint64, QJsonObject>> lists;
+    QSet<QString> fields;
+    while (q.next()) {
+        const QJsonObject rules =
+            QJsonDocument::fromJson(q.value(1).toString().toUtf8()).object();
+        collectFields(rules, fields);
+        const QString sort =
+            rules["sort"].toObject()["field"].toString("random");
+        if (sort != "random") fields.insert(sort);
+        lists.append({q.value(0).toLongLong(), rules});
     }
-    QSqlDatabase db = c.db();
+    if (lists.isEmpty()) return info;
+    QVector<Track> tracks = loadTracks(c.db(), fields, nullptr, &info.stats);
+    const QSet<qint64> wanted(openIds.begin(), openIds.end());
+    for (const auto &l : lists) {
+        info.matched.insert(l.first,
+                            chooseFrom(tracks, l.second, {},
+                                       std::numeric_limits<int>::max())
+                                .size());
+        if (l.first == openId) info.why = explainWith(l.second, tracks, wanted);
+    }
+    return info;
+}
+
+namespace {
+
+// A dynamic playlist that is short of entries, and the tracks chosen for it.
+struct Pending {
+    qint64 id;
+    QJsonObject rules;
+    QSet<qint64> exclude;
+    int missing;
+    qint64 end;
+    QVector<qint64> chosen;
+};
+
+// The dynamic playlists that have fewer visible entries than their length.
+QVector<Pending> shortLists(QSqlDatabase db) {
     QSqlQuery q(db);
     q.exec("PRAGMA table_info(playlist_item)");
     bool marks = false;
@@ -556,13 +624,6 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
     if (q.exec("SELECT value FROM meta WHERE key = 'dynamic_length'") &&
         q.next())
         length = qMax(1, q.value(0).toInt());
-    struct Pending {
-        qint64 id;
-        QJsonObject rules;
-        QSet<qint64> exclude;
-        int missing;
-        qint64 end;
-    };
     QVector<Pending> pending;
     QSqlQuery lists(db);
     lists.exec(
@@ -594,49 +655,82 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
         p.missing = length - visible;
         if (p.missing > 0 && !p.rules.isEmpty()) pending.append(p);
     }
-    if (pending.isEmpty()) return 0;
-    QSet<QString> fields;
-    for (const Pending &p : pending) collectFields(p.rules, fields);
-    QVector<Track> tracks = loadTracks(db, fields);
-    q.exec("PRAGMA journal_mode = DELETE");
-    q.exec("PRAGMA synchronous = FULL");
-    int changed = 0;
-    if (!db.transaction()) {
-        if (problem)
-            *problem =
-                "Cannot refill the dynamic playlists: " + db.lastError().text();
-        return 0;
-    }
-    for (const Pending &p : pending) {
-        const QVector<qint64> ids =
-            chooseFrom(tracks, p.rules, p.exclude, p.missing);
-        QSqlQuery insert(db);
-        insert.prepare("INSERT INTO playlist_item (playlist_id, pos, file_id) "
-                       "VALUES (?, ?, ?)");
-        qint64 pos = p.end;
-        for (qint64 id : ids) {
-            insert.addBindValue(p.id);
-            insert.addBindValue(pos++);
-            insert.addBindValue(id);
-            if (!insert.exec()) {
-                if (problem)
-                    *problem = "Cannot refill the dynamic playlists: " +
-                               insert.lastError().text();
-                db.rollback();
+    return pending;
+}
+
+}  // namespace
+
+// Reading the lists and choosing among the whole library (over a second on the
+// phone) happen without the lock, which would keep the other writers (a
+// rating, a play) waiting; only writing the chosen tracks takes it.  If
+// something wrote to the database meanwhile (dbGeneration changed) the choice
+// is made again from what is there now.
+int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const int generation = dbGeneration();
+        QVector<Pending> pending;
+        {
+            Connection c(dbPath);
+            if (!c.ok) {
+                if (problem) *problem = c.error;
                 return 0;
             }
+            pending = shortLists(c.db());
+            if (pending.isEmpty()) return 0;
+            QSet<QString> fields;
+            for (const Pending &p : pending) collectFields(p.rules, fields);
+            QVector<Track> tracks = loadTracks(c.db(), fields);
+            for (Pending &p : pending)
+                p.chosen = chooseFrom(tracks, p.rules, p.exclude, p.missing);
         }
-        if (!ids.isEmpty()) ++changed;
+        QMutexLocker lock(&dbLock());
+        if (generation != dbGeneration()) continue;  // choose again
+        Connection c(dbPath);
+        if (!c.ok) {
+            if (problem) *problem = c.error;
+            return 0;
+        }
+        QSqlDatabase db = c.db();
+        QSqlQuery q(db);
+        q.exec("PRAGMA journal_mode = DELETE");
+        q.exec("PRAGMA synchronous = FULL");
+        int changed = 0;
+        if (!db.transaction()) {
+            if (problem)
+                *problem = "Cannot refill the dynamic playlists: " +
+                           db.lastError().text();
+            return 0;
+        }
+        for (const Pending &p : pending) {
+            QSqlQuery insert(db);
+            insert.prepare("INSERT INTO playlist_item (playlist_id, pos, "
+                           "file_id) VALUES (?, ?, ?)");
+            qint64 pos = p.end;
+            for (qint64 id : p.chosen) {
+                insert.addBindValue(p.id);
+                insert.addBindValue(pos++);
+                insert.addBindValue(id);
+                if (!insert.exec()) {
+                    if (problem)
+                        *problem = "Cannot refill the dynamic playlists: " +
+                                   insert.lastError().text();
+                    db.rollback();
+                    return 0;
+                }
+            }
+            if (!p.chosen.isEmpty()) ++changed;
+        }
+        if (!db.commit()) {
+            if (problem)
+                *problem = "Cannot refill the dynamic playlists: " +
+                           db.lastError().text();
+            db.rollback();
+            return 0;
+        }
+        if (changed) ++dbGeneration();
+        return changed;
     }
-    if (!db.commit()) {
-        if (problem)
-            *problem =
-                "Cannot refill the dynamic playlists: " + db.lastError().text();
-        db.rollback();
-        return 0;
-    }
-    if (changed) ++dbGeneration();
-    return changed;
+    return 0;  // the database kept changing: the next play tries again
 }
 
 QHash<qint64, SongStat> songStats(const QString &dbPath) {

@@ -162,6 +162,22 @@ class Link:
             for k, v in json.loads(self._ok("GET", "/files")[1]).items()
         }
 
+    def ringtones(self) -> dict[str, int]:
+        # The files in the phone's Ringtones folder (an old app has none).
+        return {
+            k: int(v)
+            for k, v in json.loads(self._ok("GET", "/ringtones")[1]).items()
+        }
+
+    def put_ringtone(self, source: str, name: str) -> None:
+        with open(source, "rb") as f:
+            self._ok(
+                "PUT",
+                "/ringtone/" + urllib.parse.quote(name, safe=""),
+                body=f,
+                length=os.path.getsize(source),
+            )
+
     def put_file(self, source: str, rel: str) -> None:
         with open(source, "rb") as f:
             self._ok(

@@ -69,6 +69,72 @@ def manifest(
     return files, skipped
 
 
+SAMPLES_FOLDER = "Track Samples"  # what the player's Samples tab saves into
+
+
+def ringtone_manifest(
+    files: list[tuple[str, str, int]]
+) -> tuple[list[tuple[str, str, int]], list[str]]:
+    # From the manifest: [(source path, file name, size)] of every file in
+    # the folder Track Samples, which the phone gets in its Ringtones folder
+    # as well (a folder holds names, so two with the same name keep the first),
+    # and the ones left out.
+    chosen: dict[str, tuple[str, str, int]] = {}
+    skipped: list[str] = []
+    for source, rel, size in files:
+        if not rel.startswith(SAMPLES_FOLDER + "/"):
+            continue
+        name = rel.rsplit("/", 1)[-1]
+        if name.lower() in chosen:
+            skipped.append(f"{rel}: same name as {chosen[name.lower()][0]}")
+            continue
+        chosen[name.lower()] = (source, name, size)
+    return list(chosen.values()), skipped
+
+
+def copy_ringtones(
+    link,
+    files: list[tuple[str, str, int]],
+    jobs: int,
+    log=print,
+    cancelled=lambda: False,
+    progress=lambda *_: None,
+) -> int:
+    # Put the track samples among the files into the phone's Ringtones folder,
+    # the ones that are not there or differ in size.  Nothing is deleted
+    # there: the phone manages that folder.  A phone whose app does not know
+    # ringtones is told so in the log and is not an error.  Returns 1 when a
+    # file could not be copied.
+    wanted, skipped = ringtone_manifest(files)
+    for line in skipped:
+        log(f"not a ringtone: {line}")
+    if not wanted:
+        return 0
+    try:
+        have = {k.lower(): v for k, v in link.ringtones().items()}
+    except Exception as e:  # an app from before the ringtones
+        log(
+            "No ringtones copied: the app on the phone does not take them"
+            f" ({str(e)[:100]}).  Install the newer app."
+        )
+        return 0
+    todo = [f for f in wanted if have.get(f[1].lower()) != f[2]]
+    log(
+        f"{len(wanted)} track samples, {len(wanted) - len(todo)} already in"
+        f" the Ringtones folder of the phone, {len(todo)} to copy."
+    )
+    if not todo:
+        return 0
+    return copy_files(
+        todo,
+        lambda source, name: link.put_ringtone(source, name),
+        jobs,
+        log,
+        cancelled,
+        progress,
+    )
+
+
 def copy_files(
     todo: list[tuple[str, str, int]],
     push_one,

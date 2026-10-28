@@ -105,7 +105,7 @@ def music_todo(have: dict[str, int]):
         f" ({sum(s for _f, _r, s in todo) / 1e9:.1f} GB)",
         flush=True,
     )
-    return todo
+    return todo, files
 
 
 def load_recent() -> list[dict]:
@@ -180,10 +180,14 @@ def sync_network(args) -> int:
         )
     if not args.no_music:
         print("Music:")
-        todo = music_todo({k.lower(): v for k, v in link.files().items()})
+        have = {k.lower(): v for k, v in link.files().items()}
+        todo, files = music_todo(have)
         if todo and phone_files.copy_files(
             todo, lambda source, rel: link.put_file(source, rel), args.jobs
         ):
+            return 1
+        print("Ringtones (the track samples):")
+        if phone_files.copy_ringtones(link, files, args.jobs):
             return 1
     link.done()
     return 0

@@ -1053,7 +1053,9 @@ ApplicationWindow {
         readonly property bool night: Qt.styleHints.colorScheme === Qt.Dark
         modal: true
         dim: true
-        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, night ? 0.75 : 0.6) }
+        Overlay.modal: Rectangle {
+            color: Qt.rgba(0, 0, 0, mainMenu.night ? 0.75 : 0.6)
+        }
         background: Rectangle {
             implicitWidth: 260
             radius: 12

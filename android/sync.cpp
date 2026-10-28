@@ -13,6 +13,8 @@
 #include <QHash>
 #include <QJsonDocument>
 #ifdef Q_OS_ANDROID
+#include <QCoreApplication>
+#include <QJniEnvironment>
 #include <QJniObject>
 #endif
 #include <QJsonObject>
@@ -86,6 +88,54 @@ bool safePath(const QString &path) {
     return !path.startsWith("tags.db");
 }
 
+// The phone's Ringtones folder, where the desktop puts the track samples so
+// that they can be chosen as ringtones.  The environment variable is for
+// tests on the desktop.
+QString ringtoneDir() {
+    const QString fixed = qEnvironmentVariable("MILKCRATEVINYL_RINGTONES");
+    if (!fixed.isEmpty()) return fixed;
+#ifdef Q_OS_ANDROID
+    const QJniObject dir = QJniObject::callStaticObjectMethod(
+        "android/os/Environment", "getExternalStoragePublicDirectory",
+        "(Ljava/lang/String;)Ljava/io/File;",
+        QJniObject::getStaticObjectField<jstring>("android/os/Environment",
+                                                  "DIRECTORY_RINGTONES")
+            .object<jstring>());
+    if (dir.isValid())
+        return dir.callObjectMethod<jstring>("getPath").toString();
+    return "/storage/emulated/0/Ringtones";
+#else
+    return QDir::homePath() + "/Ringtones";
+#endif
+}
+
+// A name in the Ringtones folder itself (no folders), safe like a path.
+bool safeName(const QString &name) {
+    return !name.contains('/') && safePath(name);
+}
+
+// Android's media scanner has to be told about a file the app wrote, or the
+// ringtone list does not show it until the next scan.
+void scanMedia(const QString &path) {
+#ifdef Q_OS_ANDROID
+    QJniEnvironment env;
+    jobjectArray paths =
+        env->NewObjectArray(1, env.findClass("java/lang/String"), nullptr);
+    env->SetObjectArrayElement(paths, 0,
+                               QJniObject::fromString(path).object<jstring>());
+    QJniObject::callStaticMethod<void>(
+        "android/media/MediaScannerConnection", "scanFile",
+        "(Landroid/content/Context;[Ljava/lang/String;[Ljava/lang/String;"
+        "Landroid/media/MediaScannerConnection$OnScanCompletedListener;)V",
+        QNativeInterface::QAndroidApplication::context().object(), paths,
+        nullptr, nullptr);
+    env->DeleteLocalRef(paths);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+#else
+    Q_UNUSED(path)
+#endif
+}
+
 // What the desktop shows beside the pairing code, so that several phones can be
 // told apart.
 QString deviceName() {
@@ -120,7 +170,7 @@ private:
     QHash<QString, QString> headers;
     QFile out;
     qint64 remaining = 0, total = 0;
-    enum Kind { None, Db, File } kind = None;
+    enum Kind { None, Db, File, Ringtone } kind = None;
     QString tempPath, finalPath;
 
     void onClosed() {
@@ -195,11 +245,16 @@ private:
         if (method == "GET" && target == "/hello") return hello();
         if (method == "GET" && target == "/db") return sendDb();
         if (method == "GET" && target == "/files") return sendFiles();
+        if (method == "GET" && target == "/ringtones") return sendRingtones();
         if (method == "POST" && target == "/done") {
             emit srv->status(
-                QString("Sync finished: %1 music file(s) received (%2 MB).")
+                QString("Sync finished: %1 music file(s) received (%2 MB)%3.")
                     .arg(srv->m_files)
-                    .arg(srv->m_bytes / 1000000));
+                    .arg(srv->m_bytes / 1000000)
+                    .arg(srv->m_ringtones == 0
+                             ? QString()
+                             : QString(", %1 ringtone(s)")
+                                   .arg(srv->m_ringtones)));
             reply(200, "ok");
             QTimer::singleShot(300, srv, [srv = srv] {
                 srv->stop();
@@ -215,6 +270,13 @@ private:
             return startPut(File, srv->m_root + "/" + path + ".part",
                             srv->m_root + "/" + path);
         }
+        if (method == "PUT" && target.startsWith("/ringtone/")) {
+            QString name = QUrl::fromPercentEncoding(target.mid(10).toUtf8());
+            if (!safeName(name)) return reply(400, "bad name");
+            const QString dir = ringtoneDir();
+            return startPut(Ringtone, dir + "/" + name + ".part",
+                            dir + "/" + name);
+        }
         reply(404, "unknown request");
     }
 
@@ -222,7 +284,7 @@ private:
         QJsonObject o;
         o["app"] = "musicplayer-sync";
         o["name"] = deviceName();
-        o["version"] = 1;
+        o["version"] = 2;  // 2: the Ringtones folder (/ringtones)
         o["root"] = srv->m_root;
         QString existing =
             srv->m_root;  // the music folder may not exist yet on a new phone
@@ -286,6 +348,20 @@ private:
               "application/json");
     }
 
+    // The files in the Ringtones folder (it is not part of the music folder)
+    // with their sizes.
+    void sendRingtones() {
+        QJsonObject files;
+        const QDir dir(ringtoneDir());
+        for (const QFileInfo &f :
+             dir.entryInfoList(QDir::Files | QDir::Hidden, QDir::Name)) {
+            if (f.fileName().endsWith(".part")) continue;
+            files[f.fileName()] = double(f.size());
+        }
+        reply(200, QJsonDocument(files).toJson(QJsonDocument::Compact),
+              "application/json");
+    }
+
     void startPut(Kind k, const QString &temp, const QString &final_) {
         bool numeric = false;
         total = headers.value("content-length").toLongLong(&numeric);
@@ -306,6 +382,17 @@ private:
     void finishPut() {
         out.flush();
         out.close();
+        if (kind == Ringtone) {
+            if (!replaceFile(tempPath, finalPath)) {
+                QFile::remove(tempPath);
+                return reply(500, "cannot rename");
+            }
+            scanMedia(finalPath);
+            ++srv->m_ringtones;
+            emit srv->status(QString("Receiving ringtones: %1 file(s)")
+                                 .arg(srv->m_ringtones));
+            return reply(200, "ok");
+        }
         if (kind == File) {
             if (!replaceFile(tempPath, finalPath)) {
                 QFile::remove(tempPath);
@@ -333,6 +420,8 @@ private:
                     "the database failed its check; the phone keeps its own");
             }
             replaced = replaceFile(tempPath, finalPath);
+            if (replaced)
+                ++dbGeneration();  // what was read from the old one is stale
         }
         if (!replaced) {
             QFile::remove(tempPath);
@@ -397,6 +486,7 @@ void SyncServer::start() {
     if (m_code.isEmpty()) m_code = storedCode(false);
     m_failures = 0;
     m_files = 0;
+    m_ringtones = 0;
     m_bytes = 0;
     m_server = new QTcpServer(this);
     connect(m_server, &QTcpServer::newConnection, this, [this] {

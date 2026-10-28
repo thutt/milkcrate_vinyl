@@ -13,6 +13,7 @@
 #include <QHash>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include "dynamic.h"
@@ -22,6 +23,7 @@ struct Track {
     QString path;  // relative to the music root
     QString title, artist, album,
         genre;       // genre: all of the track's genres, for the search only
+    QStringList genres;  // the same, one by one, for the automatic equalizer
     int number = 0;  // track number, 0 = none
     double loudness = 0;  // LUFS
     bool measured = false;
@@ -42,6 +44,8 @@ struct QueueItem {
     qint64 pos = -1;  // place in the playlist it came from
     int rating = -1;  // 0 to 5 stars, -1 = not rated (for the lists)
     QString detail;   // why a dynamic playlist chose it (for the lists)
+    QStringList genres;  // for the automatic equalizer: no database read when
+                         // the song starts
 };
 
 class TrackModel : public QAbstractListModel {
@@ -80,6 +84,7 @@ public:
     // the plays and last play of every song, by file id; a row shows them
     // when the list asks for its text, so only the rows on screen cost time
     void setStats(const QHash<qint64, SongStat> &stats);
+    QHash<qint64, SongStat> stats() const { return m_stats; }
     void setSort(const QString &key);  // "artist", "title", "album" or "path"
 signals:
     void countChanged();

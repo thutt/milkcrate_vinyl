@@ -123,7 +123,7 @@ void Engine::setEqualizer(bool on, const QVector<double> &gains,
     m_customs = customs;
     if (automatic != m_eqAuto || (automatic && changed)) {
         m_eqAuto = automatic;
-        chooseEqPreset(m_currentId);
+        chooseEqPreset();
     }
     applyEqGains();
 }
@@ -142,11 +142,11 @@ void Engine::applyEqGains() {
     if (m_sourceRate > 0) m_eq.configure(m_sourceRate, eqGains());
 }
 
-void Engine::chooseEqPreset(qint64 id) {
+void Engine::chooseEqPreset() {
     m_autoChosen = false;
     m_autoName.clear();
-    if (m_eqAuto && id >= 0) {
-        const QStringList genres = readGenres(id);
+    if (m_eqAuto && m_currentId >= 0) {
+        const QStringList &genres = m_genres;
         const int custom = eqCustomForGenres(m_customs, genres);
         if (custom >= 0) {
             m_autoName = m_customs[custom].name;
@@ -171,28 +171,6 @@ static void noteWait(const QElapsedTimer &since, const char *what) {
     if (since.elapsed() > 50)
         qWarning("engine thread waited %lld ms for the database (%s)",
                  since.elapsed(), what);
-}
-
-QStringList Engine::readGenres(qint64 id) {
-    QStringList genres;
-    if (m_dbPath.isEmpty()) return genres;
-    const QString name = "genre-" + QUuid::createUuid().toString(QUuid::Id128);
-    {
-        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
-        db.setDatabaseName(m_dbPath);
-        db.setConnectOptions("QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
-        if (db.open()) {
-            QSqlQuery q(db);
-            q.prepare("SELECT value FROM tag WHERE file_id = ? AND name = "
-                      "'GENRE' ORDER BY pos");
-            q.addBindValue(id);
-            if (q.exec())
-                while (q.next()) genres << q.value(0).toString();
-            db.close();
-        }
-    }
-    QSqlDatabase::removeDatabase(name);
-    return genres;
 }
 
 void Engine::routeAudio() {
@@ -447,7 +425,7 @@ void Engine::buildOrder(int startRow, bool keepFirst) {
 }
 
 void Engine::playQueue(const QVector<QueueItem> &items, int row, bool shuffle,
-                       qint64 listId) {
+                       qint64 listId, bool dynamic) {
     if (row < 0 || row >= items.size()) return;
     qInfo("song chosen from a list: row %d of %d, shuffle %s, at %lld ms of "
           "the song playing", row + 1, int(items.size()), shuffle ? "on" : "off",
@@ -458,12 +436,14 @@ void Engine::playQueue(const QVector<QueueItem> &items, int row, bool shuffle,
     m_shuffle = shuffle;
     buildOrder(row, true);
     m_visited.clear();
-    m_follow = listIsDynamic();
+    m_follow = dynamic;
+    m_listCached = false;
     if (m_follow) {  // the songs after this one are chosen from the database
         const QueueItem first = m_order[m_pos];
         m_order.clear();
         m_order.append(first);
         m_pos = 0;
+        prefetchList();
     }
     playCurrent();
 }
@@ -520,18 +500,13 @@ void Engine::playCurrent() {
           "gain %.3f", m_leveling ? "on" : "off", m_target,
           m_measured ? "" : "unmeasured ", m_measured ? m_loudness : 0.0,
           m_gain);
-#ifdef Q_OS_ANDROID
-    QJniObject::callStaticMethod<void>(
-        "org/musicplayer/player/PlaybackService", "report",
-        "(Landroid/content/Context;Ljava/lang/String;)V",
-        QNativeInterface::QAndroidApplication::context().object(),
-        QJniObject::fromString("song start").object<jstring>());
-#endif
     emit current(t.id, t.title, t.artist, t.album);
-    m_rating = -1;
+    m_rating = t.rating;  // what came with the song; the stored one follows
+    emit ratingKnown(t.id, t.rating);
     lap("telling the screen");
     readRating(t.id);
     lap("rating");
+    m_genres = t.genres;
     QString full = m_root + "/" + cleanPath(t.path);
     if (!QFileInfo::exists(full)) {
         m_player->stop();
@@ -546,7 +521,7 @@ void Engine::playCurrent() {
     m_stalledMs = 0;
     m_kicks = 0;
     lap("file check");
-    chooseEqPreset(t.id);
+    chooseEqPreset();
     applyEqGains();
     lap("genres");
     routeAudio();
@@ -575,7 +550,7 @@ void Engine::resume() {
 void Engine::toggle() {
     if (m_currentId < 0) return;
     if (m_queueEnded) {  // Play after the end: the list from the top
-        if (m_listId >= 0 && listIsDynamic()) {
+        if (m_listId >= 0 && m_follow) {
             continueFromList(true);
             return;
         }
@@ -648,7 +623,7 @@ void Engine::next() {
 // first song after this one's place, or any song not yet played if shuffling.
 // False: none is left.
 bool Engine::followNext() {
-    m_queue = playlistItems(m_dbPath, m_listId);
+    m_queue = m_listCached ? m_listCache : playlistItems(m_dbPath, m_listId);
     const qint64 here = m_order[m_pos].pos;
     QVector<const QueueItem *> open;
     for (const QueueItem &t : m_queue)
@@ -669,24 +644,27 @@ bool Engine::followNext() {
     return true;
 }
 
-bool Engine::listIsDynamic() const {
-    if (m_listId < 0 || m_dbPath.isEmpty()) return false;
-    bool dynamic = false;
-    const QString name = "kind-" + QUuid::createUuid().toString(QUuid::Id128);
-    {
-        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
-        db.setDatabaseName(m_dbPath);
-        db.setConnectOptions("QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
-        if (db.open()) {
-            QSqlQuery q(db);
-            q.prepare("SELECT rules IS NOT NULL FROM playlist WHERE id = ?");
-            q.addBindValue(m_listId);
-            dynamic = q.exec() && q.next() && q.value(0).toBool();
-            db.close();
-        }
-    }
-    QSqlDatabase::removeDatabase(name);
-    return dynamic;
+// Read the playlist again in the background, after a change that the app made
+// to it, so that the next song can be chosen from memory (followNext).
+void Engine::prefetchList() {
+    if (!m_follow || m_listId < 0 || m_dbPath.isEmpty()) return;
+    QThreadPool::globalInstance()->start(
+        [this, id = m_listId, path = m_dbPath] {
+            const QVector<QueueItem> items = playlistItems(path, id);
+            QMetaObject::invokeMethod(
+                this,
+                [this, id, items] {
+                    if (id != m_listId || !m_follow) return;
+                    m_listCache = items;
+                    m_listCached = true;
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void Engine::listChanged() {
+    m_listCached = false;
+    prefetchList();
 }
 
 // The last song of the queue has gone off the dynamic playlist and the list
@@ -1091,28 +1069,35 @@ void Engine::writePlay(const QString &path, qint64 id) {
 // desktop's rating.
 void Engine::readRating(qint64 id) {
     if (m_dbPath.isEmpty()) return;
-    int rating = -1;
-    {
-        const QString name =
-            "rating-" + QUuid::createUuid().toString(QUuid::Id128);
+    QThreadPool::globalInstance()->start([this, id, path = m_dbPath] {
+        int rating = -1;
         {
-            QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
-            db.setDatabaseName(m_dbPath);
-            db.setConnectOptions(
-                "QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
-            if (db.open()) {
-                QSqlQuery q(db);
-                q.prepare("SELECT rating FROM media_file WHERE id = ?");
-                q.addBindValue(id);
-                if (q.exec() && q.next() && !q.value(0).isNull())
-                    rating = q.value(0).toInt();
-                db.close();
+            const QString name =
+                "rating-" + QUuid::createUuid().toString(QUuid::Id128);
+            {
+                QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+                db.setDatabaseName(path);
+                db.setConnectOptions(
+                    "QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=3000");
+                if (db.open()) {
+                    QSqlQuery q(db);
+                    q.prepare("SELECT rating FROM media_file WHERE id = ?");
+                    q.addBindValue(id);
+                    if (q.exec() && q.next() && !q.value(0).isNull())
+                        rating = q.value(0).toInt();
+                    db.close();
+                }
             }
+            QSqlDatabase::removeDatabase(name);
         }
-        QSqlDatabase::removeDatabase(name);
-    }
-    if (id == m_currentId) m_rating = rating;
-    emit ratingKnown(id, rating);
+        QMetaObject::invokeMethod(
+            this,
+            [this, id, rating] {
+                if (id == m_currentId) m_rating = rating;
+                emit ratingKnown(id, rating);
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 void Engine::setRating(qint64 id, int rating) {
@@ -1251,12 +1236,18 @@ void Engine::writePlayed(const QString &path, const QVector<qint64> &ids) {
     ++dbGeneration();
     emit playCounted();
     lock.unlock();  // the top-up takes the lock itself
-    QMetaObject::invokeMethod(this, [this] { refillLists(); },
-                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            prefetchList();  // the played song is off the list
+            refillLists();
+        },
+        Qt::QueuedConnection);
 }
 
 void Engine::setDatabase(const QString &path) {
     m_dbPath = path;
+    m_listCached = false;
     QTimer::singleShot(4000, this, [this] { refillLists(); });
 }
 
@@ -1273,7 +1264,12 @@ void Engine::refillLists() {
             emit message(problem);
         else if (changed)
             emit playCounted();  // the lists on the screen are read again
-        QMetaObject::invokeMethod(this, [this] { continueFromList(); },
-                                  Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            this,
+            [this, changed] {
+                if (changed) prefetchList();  // the new songs are on it
+                continueFromList();
+            },
+            Qt::QueuedConnection);
     });
 }

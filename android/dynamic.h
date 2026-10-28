@@ -40,13 +40,6 @@ int countMatches(const QString &dbPath, qint64 playlistId);
 // playlist id -> matches.  Takes no lock.
 QHash<qint64, int> countAllMatches(const QString &dbPath);
 
-// Why the tracks of a dynamic playlist were chosen: for each of the given track
-// ids, the values of the fields its rules test (and sort by), such as "Last
-// played: never  ·  Rating: not rated".  Empty for a playlist without rules.
-// Takes no lock.
-QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
-                                     const QList<qint64> &ids);
-
 // The plays and the latest play of a whole song (every file with the same
 // artist and title), by file id, for every file of the library.  Takes no
 // lock.
@@ -55,6 +48,27 @@ struct SongStat {
     QString last;  // "yyyy-MM-ddTHH:mm:ssZ", empty if never played
 };
 QHash<qint64, SongStat> songStats(const QString &dbPath);
+
+// Why the tracks of a dynamic playlist were chosen: for each of the given track
+// ids, the values of the fields its rules test (and sort by), such as "Last
+// played: never  ·  Rating: not rated".  Empty for a playlist without rules.
+// stats: the plays of every song, when the caller has them already (they are
+// the longest part of this).  Takes no lock.
+QHash<qint64, QString> explainTracks(
+    const QString &dbPath, qint64 playlistId, const QList<qint64> &ids,
+    const QHash<qint64, SongStat> *stats = nullptr);
+
+// What the lists on the screen need after a play, from one pass over the
+// library: how many tracks the rules of every dynamic playlist select (by
+// playlist id), why the open playlist (openId, with the entries openIds)
+// chose its entries, and the plays of every song.  Takes no lock.
+struct DynamicInfo {
+    QHash<qint64, int> matched;
+    QHash<qint64, QString> why;
+    QHash<qint64, SongStat> stats;
+};
+DynamicInfo dynamicInfo(const QString &dbPath, qint64 openId,
+                        const QList<qint64> &openIds);
 
 // The BPM tag of a file as a number; 0 if it has none or it is not a number.
 // Takes no lock.

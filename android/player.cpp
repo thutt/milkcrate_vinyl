@@ -25,6 +25,7 @@
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QThreadPool>
+#include <QElapsedTimer>
 #include <algorithm>
 #include <chrono>
 
@@ -46,12 +47,6 @@ static void nativeCommand(JNIEnv *, jclass, jint what, jlong argument) {
             g_engine,
             [what, argument] { g_engine->handleCommand(what, argument); },
             Qt::QueuedConnection);
-}
-
-static void nativeLog(JNIEnv *env, jclass, jstring line) {
-    const char *chars = env->GetStringUTFChars(line, nullptr);
-    qInfo("%s", chars);
-    env->ReleaseStringUTFChars(line, chars);
 }
 #endif
 
@@ -107,6 +102,10 @@ Player::Player(QObject *parent)
             [this](const QString &text) { say(text); });
     connect(m_engine, &Engine::playCounted, this,
             [this] { reloadPlaylists(); });
+    m_reloadTimer.setSingleShot(true);
+    m_reloadTimer.setInterval(1200);
+    connect(&m_reloadTimer, &QTimer::timeout, this,
+            [this] { refreshInfo(true); });
     m_thread.start();
     m_sync->moveToThread(&m_syncThread);
     connect(m_engine, &Engine::eqChosen, this, [this](const QString &name) {
@@ -129,7 +128,10 @@ Player::Player(QObject *parent)
     });
     connect(m_sync, &SyncServer::finished, this,
             [this] { emit syncFinished(); });
-    connect(m_sync, &SyncServer::databaseReplaced, this, [this] { reload(); });
+    connect(m_sync, &SyncServer::databaseReplaced, this, [this] {
+        onEngine([e = m_engine] { e->listChanged(); });
+        reload();
+    });
     m_syncThread.start();
     onEngine([e = m_engine] { e->init(); });
     pushVolume();
@@ -140,9 +142,7 @@ Player::Player(QObject *parent)
     QJniEnvironment env;
     env.registerNativeMethods(
         "org/musicplayer/player/PlaybackService",
-        {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)},
-         {"log", "(Ljava/lang/String;)V",
-          reinterpret_cast<void *>(nativeLog)}});
+        {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)}});
 #endif
     connect(&m_poll, &QTimer::timeout, this, [this] {
         qint64 p = m_engine->position, d = m_engine->duration;
@@ -451,14 +451,18 @@ void Player::reload() {
         return;
     }
     QString error;
+    QElapsedTimer clock;  // how long the start waits for the library
+    clock.start();
     if (!m_model.load(m_dbPath, &error)) {
         say(error);
         return;
     }
+    qInfo("library read: %d songs, %lld ms", m_model.total(),
+          qint64(clock.elapsed()));
     QString playlistError;
     m_playlists.setItems(loadPlaylists(m_dbPath, &playlistError));
-    countMatched();
-    refreshStats();
+    qInfo("playlists read: %lld ms", qint64(clock.elapsed()));
+    refreshInfo(false);
     if (!playlistError.isEmpty()) {
         say(playlistError);
         return;
@@ -753,19 +757,8 @@ void Player::playPlaylist(int row) {
             : 0;
     setPlayingList(p->id);
     onEngine([e = m_engine, items = std::move(items), start, shuffle,
-              id = p->id] {
-        e->playQueue(items, start, shuffle, id);
-    });
-}
-
-// How many library tracks each dynamic playlist's rules select, worked out in
-// the background (the library is read once).
-void Player::countMatched() {
-    QThreadPool::globalInstance()->start([this, path = m_dbPath] {
-        const QHash<qint64, int> counts = countAllMatches(path);
-        QMetaObject::invokeMethod(
-            this, [this, counts] { m_playlists.setMatched(counts); },
-            Qt::QueuedConnection);
+              id = p->id, dynamic = p->kind == "dynamic"] {
+        e->playQueue(items, start, shuffle, id, dynamic);
     });
 }
 
@@ -777,10 +770,10 @@ void Player::openPlaylist(int row) {
     m_openId = p->id;
     m_openDynamic = p->kind == "dynamic";
     emit openChanged();
-    m_openMatched = -1;  // counted in the background: the rules are matched
-                         // against every track
+    m_openMatched = p->matched;  // from the last pass over the library, if
+                                 // there has been one
     emit openMatchedChanged();
-    if (p->kind == "dynamic")
+    if (p->kind == "dynamic" && p->matched < 0)
         QThreadPool::globalInstance()->start(
             [this, id = p->id, path = m_dbPath] {
                 const int n = countMatches(path, id);
@@ -803,8 +796,9 @@ void Player::playEntry(int row) {
         return;
     }
     setPlayingList(m_openId);
-    onEngine([e = m_engine, items, row, shuffle = shuffle(), id = m_openId] {
-        e->playQueue(items, row, shuffle, id);
+    onEngine([e = m_engine, items, row, shuffle = shuffle(), id = m_openId,
+              dynamic = m_openDynamic] {
+        e->playQueue(items, row, shuffle, id, dynamic);
     });
 }
 
@@ -820,8 +814,10 @@ void Player::showEntries(qint64 id) {
     QList<qint64> ids;
     for (const QueueItem &t : m_entries.items()) ids << t.id;
     if (ids.isEmpty()) return;
-    QThreadPool::globalInstance()->start([this, id, ids, path = m_dbPath] {
-        const QHash<qint64, QString> why = explainTracks(path, id, ids);
+    QThreadPool::globalInstance()->start([this, id, ids, path = m_dbPath,
+                                          stats = m_model.stats()] {
+        const QHash<qint64, QString> why =
+            explainTracks(path, id, ids, stats.isEmpty() ? nullptr : &stats);
         if (why.isEmpty()) return;
         QMetaObject::invokeMethod(
             this,
@@ -856,18 +852,59 @@ void Player::showBpm(qint64 id) {
     });
 }
 
-void Player::refreshStats() {
-    QThreadPool::globalInstance()->start([this, path = m_dbPath] {
-        const QHash<qint64, SongStat> stats = songStats(path);
+void Player::refreshInfo(bool lists) {
+    if (m_infoBusy) {
+        m_infoAgain = true;
+        m_infoListsAgain = m_infoListsAgain || lists;
+        return;
+    }
+    m_infoBusy = true;
+    const qint64 open = m_openId;
+    QThreadPool::globalInstance()->start([this, lists, open,
+                                          path = m_dbPath] {
+        QElapsedTimer clock;
+        clock.start();
+        const QList<PlaylistInfo> playlists =
+            lists ? loadPlaylists(path) : QList<PlaylistInfo>();
+        const QVector<QueueItem> entries =
+            lists && open >= 0 ? playlistItems(path, open)
+                               : QVector<QueueItem>();
+        QList<qint64> ids;
+        for (const QueueItem &t : entries) ids << t.id;
+        const DynamicInfo info = dynamicInfo(path, open, ids);
+        qInfo("library pass (plays, matches, entries): %lld ms",
+              qint64(clock.elapsed()));
         QMetaObject::invokeMethod(
-            this, [this, stats] { m_model.setStats(stats); },
+            this,
+            [this, lists, open, playlists, entries, info] {
+                if (lists) {
+                    m_playlists.setItems(playlists);
+                    if (open >= 0 && open == m_openId) {
+                        m_entries.setItems(entries);
+                    }
+                }
+                m_playlists.setMatched(info.matched);
+                m_model.setStats(info.stats);
+                if (open >= 0 && open == m_openId) {
+                    if (!info.why.isEmpty()) m_entries.setDetails(info.why);
+                    const int n = info.matched.value(open, -1);
+                    if (n >= 0 && n != m_openMatched) {
+                        m_openMatched = n;
+                        emit openMatchedChanged();
+                    }
+                }
+                m_infoBusy = false;
+                if (m_infoAgain) {
+                    const bool again = m_infoListsAgain;
+                    m_infoAgain = m_infoListsAgain = false;
+                    refreshInfo(again);
+                }
+            },
             Qt::QueuedConnection);
     });
 }
 
-void Player::reloadPlaylists() {
-    m_playlists.setItems(loadPlaylists(m_dbPath));
-    countMatched();
-    refreshStats();
-    if (m_openId >= 0) showEntries(m_openId);
-}
+// After a play was recorded: dynamic lists lose a song and gain another.  The
+// writes of one song come in a burst (the play, the mark, the refill), so the
+// lists are read once, a moment after the last of them.
+void Player::reloadPlaylists() { m_reloadTimer.start(); }

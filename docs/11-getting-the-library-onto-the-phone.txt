@@ -19,6 +19,27 @@ Snippets saved in the player's Samples tab (10) are files of the database
 like any other, in the folder Track Samples of the music folder, so the
 next sync copies them too.
 
+Ringtones
+---------
+
+Every file in the folder Track Samples is also copied, by the same sync, to
+the Ringtones folder of the phone's internal storage (/Ringtones), so that
+it can be chosen in the phone's sound settings (Settings > Sounds and
+vibration > Ringtone).  The copy in the library stays: the app plays the
+snippets from it and from the playlist "Track Samples".
+  * The file keeps its name and its type (a ringtone made from a FLAC song
+    is a FLAC file; not every phone accepts every type as a ringtone).
+  * Only files that are not there, or differ in size, are copied.
+  * Nothing is deleted from the Ringtones folder, ever: removing a ringtone
+    is done on the phone.
+  * After each file the app tells Android's media scanner, so the ringtone
+    list shows it at once.
+  * The phone needs the app of this version (older apps answer that they
+    take no ringtones; the sync then says so and goes on) and the
+    permission "All files access" that the app already asks for (09).
+  * The sync from the command line (android/tools/sync_phone.py) does this
+    too, over the network; the cable method (--adb) does not.
+
 Install the app first (09).
 
 Wi-Fi sync from the player or editor
@@ -142,9 +163,14 @@ not yet rated shows five faint stars; a click anywhere else in the cell
 changes nothing), or select songs and press 0 to 5 (Delete: not rated);
 right-click > Rate does the same.  "Only songs that are not rated" shows
 the ones still to rate.  The ratings given are only shown in the list
-until Apply stores them and closes the window; Cancel (or Escape, after
-a question) closes it without storing them.  Being newer than the
-phone's, the stored ratings go to the phone at the next sync.
+until Apply stores them: Apply then takes every rated song off the list
+and leaves the window open for the songs that are still not rated, so
+with "Only songs that are not rated" checked the list shrinks to what is
+left to do.  Finish stores the ratings given since the last Apply and
+closes the window.  Cancel (or Escape, after a question) closes the
+window without storing the ratings given since the last Apply.  Being
+newer than the phone's, the stored ratings go to the phone at the next
+sync.
 
 File > Review Phone Changes reopens the list of the last sync until the
 program is closed.

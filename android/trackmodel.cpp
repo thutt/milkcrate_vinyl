@@ -141,9 +141,11 @@ bool TrackModel::load(const QString &dbPath, QString *error) {
                     t.artist = value;
                 else if (name == "ALBUM")
                     t.album = value;
-                else if (name == "GENRE")
+                else if (name == "GENRE") {
                     t.genre += (t.genre.isEmpty() ? "" : " ") +
                                value;  // a track can have several genres
+                    t.genres << value;
+                }
                 else if (name == "TRACKNUMBER")
                     t.number = value.toInt();  // "3/12" reads as 3
             }
@@ -202,9 +204,10 @@ QVector<QueueItem> TrackModel::viewItems() const {
     items.reserve(m_view.size());
     for (int pos : m_view) {
         const Track &t = m_all[pos];
-        items.append(
-            {t.id, t.path, t.title, t.artist, t.album, t.loudness, t.measured,
-             -1, t.rating});
+        QueueItem item{t.id,       t.path,     t.title, t.artist, t.album,
+                       t.loudness, t.measured, -1,      t.rating};
+        item.genres = t.genres;
+        items.append(item);
     }
     return items;
 }

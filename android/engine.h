@@ -60,10 +60,11 @@ public slots:
     void setMuted(bool on);
     void
     resume();  // play the current song if it is not playing; never restarts it
-    // listId: the playlist the items came from (-1: none); a dynamic one is
-    // read again when its items have all been played
+    // listId: the playlist the items came from (-1: none); a dynamic one
+    // (dynamic: true) is read again when its items have all been played
     void playQueue(const QVector<QueueItem> &items, int row, bool shuffle,
-                   qint64 listId = -1);
+                   qint64 listId = -1, bool dynamic = false);
+    void listChanged();  // the database was replaced: read the playlist again
     void toggle();
     void playSections(const QVector<Section> &sections,
                       bool shuffle);  // a container or sequence
@@ -91,9 +92,10 @@ public:
         qint64 id,
         int rating);  // 0 to 5, or -1 for not rated; written to tags.db at once
 private:
+    // Asked for when a song starts: the rating that came with the song is
+    // used at once and the stored one is read in the background.
     void readRating(qint64 id);
-    QStringList readGenres(qint64 id);
-    void chooseEqPreset(qint64 id);  // for the automatic equalizer
+    void chooseEqPreset();  // for the automatic equalizer, from m_genres
     const double *eqGains() const;   // the ones in use for this song
     void applyEqGains();
     void refillLists();  // top up dynamic playlists that are short, in the
@@ -123,9 +125,13 @@ private:
     bool scheduleNext();  // true when it moved on by itself
     // tell the background service what plays; force: also when stopped
     void pushState(bool force = false);
-    bool listIsDynamic() const;
-    // dynamic playlist: choose the next song from the playlist as it is now
+    // dynamic playlist: choose the next song from the playlist as it is now.
+    // The playlist is read in the background after each change the app makes
+    // to it (prefetchList), so that choosing needs no database access: the
+    // phone's card can take seconds to answer the first read after it has
+    // been idle, and the engine thread also feeds the sound.
     bool followNext();
+    void prefetchList();
     // the queue ran out: read the playlist again; user: Play was pressed,
     // else only soon after the end (never start music out of the blue)
     void continueFromList(bool user = false);
@@ -209,6 +215,9 @@ private:
     // a dynamic playlist plays from the database, one song at a time; the
     // songs already played in this round are not chosen again
     bool m_follow = false;
+    QVector<QueueItem> m_listCache;  // the playlist as it was last read
+    bool m_listCached = false;
+    QStringList m_genres;  // of the song playing
     QSet<qint64> m_visited;
     QElapsedTimer m_endClock;  // since the queue ran out
     bool m_naturalEnd = false;  // the song ended by itself: let it finish
