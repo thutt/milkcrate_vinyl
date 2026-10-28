@@ -136,6 +136,22 @@ void scanMedia(const QString &path) {
 #endif
 }
 
+// The pairing codes are compared without stopping at the first difference.
+bool sameCode(const QString &a, const QString &b) {
+    const QByteArray x = a.toUtf8(), y = b.toUtf8();
+    int diff = x.size() ^ y.size();
+    for (int i = 0; i < qMin(x.size(), y.size()); ++i) diff |= x[i] ^ y[i];
+    return diff == 0;
+}
+
+// Free bytes where a file would go (the folder may not exist yet).
+qint64 freeBytes(const QString &path) {
+    QString existing = QFileInfo(path).absolutePath();
+    while (existing.size() > 1 && !QFileInfo::exists(existing))
+        existing.truncate(existing.lastIndexOf('/'));
+    return QStorageInfo(existing).bytesAvailable();
+}
+
 // What the desktop shows beside the pairing code, so that several phones can be
 // told apart.
 QString deviceName() {
@@ -155,15 +171,33 @@ QString deviceName() {
 class SyncSession : public QObject {
 public:
     SyncSession(QTcpSocket *socket, SyncServer *server)
-        : QObject(socket), s(socket), srv(server) {
+        : QObject(socket), s(socket), srv(server),
+          peer(socket->peerAddress().toString()) {
+        ++srv->m_sessions;
+        ++srv->m_perPeer[peer];
+        // A request that stops coming ends: nobody has to be kept waiting for
+        // one that never finishes (before the code is checked, anybody on
+        // the network can open a connection).
+        idle.setSingleShot(true);
+        idle.setInterval(IdleMs);
+        connect(&idle, &QTimer::timeout, this,
+                [this] { reply(408, "request timed out"); });
+        idle.start();
         connect(s, &QTcpSocket::readyRead, this, &SyncSession::onData);
         connect(s, &QTcpSocket::disconnected, this, &SyncSession::onClosed);
     }
-    ~SyncSession() override { discard(); }
+    ~SyncSession() override {
+        --srv->m_sessions;
+        if (--srv->m_perPeer[peer] <= 0) srv->m_perPeer.remove(peer);
+        discard();
+    }
+    static constexpr int IdleMs = 20000;
 
 private:
     QTcpSocket *s;
     SyncServer *srv;
+    QString peer;
+    QTimer idle;
     QByteArray head;
     bool haveHead = false, finished = false;
     QString method, target;
@@ -171,6 +205,7 @@ private:
     QFile out;
     qint64 remaining = 0, total = 0;
     enum Kind { None, Db, File, Ringtone } kind = None;
+    static constexpr qint64 MinFree = 50'000'000;  // always left on the phone
     QString tempPath, finalPath;
 
     void onClosed() {
@@ -185,6 +220,7 @@ private:
     }
 
     void onData() {
+        idle.start();  // something came: wait again
         QByteArray data = s->readAll();
         if (!haveHead) {
             head += data;
@@ -233,7 +269,7 @@ private:
                        "the phone");
             return;
         }
-        if (headers.value("x-pin") != srv->m_code) {
+        if (!sameCode(headers.value("x-pin"), srv->m_code)) {
             ++srv->m_failures;
             reply(403, "wrong code");
             return;
@@ -366,6 +402,9 @@ private:
         bool numeric = false;
         total = headers.value("content-length").toLongLong(&numeric);
         if (!numeric || total < 0) return reply(411, "Content-Length needed");
+        const qint64 space = freeBytes(temp);
+        if (space > 0 && total > space - MinFree)
+            return reply(507, "not enough space on the phone");
         kind = k;
         tempPath = temp;
         finalPath = final_;
@@ -439,6 +478,7 @@ private:
                const QList<QPair<QString, QString>> &extra = {}) {
         if (finished) return;
         finished = true;
+        idle.stop();
         discard();
         const char *text = code == 200   ? "OK"
                            : code == 409 ? "Conflict"
@@ -490,8 +530,16 @@ void SyncServer::start() {
     m_bytes = 0;
     m_server = new QTcpServer(this);
     connect(m_server, &QTcpServer::newConnection, this, [this] {
-        while (QTcpSocket *s = m_server->nextPendingConnection())
+        while (QTcpSocket *s = m_server->nextPendingConnection()) {
+            // the desktop uses a few connections at a time
+            if (m_sessions >= MaxSessions ||
+                m_perPeer.value(s->peerAddress().toString()) >= MaxPerPeer) {
+                s->abort();
+                s->deleteLater();
+                continue;
+            }
             new SyncSession(s, this);
+        }
     });
     if (!m_server->listen(QHostAddress::AnyIPv4, Port)) {
         emit status("Cannot listen on port " + QString::number(Port) + ": " +

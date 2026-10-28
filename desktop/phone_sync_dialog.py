@@ -164,6 +164,11 @@ class SyncDialog(QDialog):
     def _remember_code(self, code: str, name: str) -> None:
         recent = phone_link.remember(self._recent(), code, name)
         self.settings.setValue("recent_codes", json.dumps(recent))
+        self.settings.sync()
+        try:  # the codes are kept for this user only
+            os.chmod(self.settings.fileName(), 0o600)
+        except OSError:
+            pass
         self._fill_codes()
 
     def reject(self) -> None:

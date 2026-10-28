@@ -72,6 +72,27 @@
 
 ## Proposed, not yet confirmed
 
+- [ ] **Code review of the phone program (2026-10-27), what is left:**
+  - Sync: the pairing code goes over the network as it is and the traffic is
+    not encrypted.  Better: the phone sends a nonce and the desktop answers
+    with an HMAC of it, so that the code never travels; then TLS with a
+    certificate pinned at pairing (the TLS plugin was left out of the package
+    to save space, so it has to be put back).  The desktop also sends the code
+    to whichever host answers its broadcast: it should first show the phone's
+    name and ask, or use the challenge.
+  - Startup: the library is read (about half a second on the phone) before the
+    first screen; read it on a worker thread, and build the search keys when the
+    first search is made.
+  - QML: 152 unqualified lookups of `player`, `tracks` and the ids of outer
+    components (qmllint); register Player as a QML singleton and use
+    `pragma ComponentBehavior: Bound`, so that the bindings are compiled
+    ahead of time.
+  - Code size: about eight copies of the open-a-connection code in engine.cpp,
+    dynamic.cpp, playlists.cpp and sync.cpp; one helper (and one connection for
+    the engine thread's small reads) would remove them.
+  - Package: R8 for the Java code (4.4 MB of classes.dex) and an FFmpeg built
+    with the decoders that are used (17.5 MB now).
+
 - [x] **Playlist containers and sequences (2026-10-16, desktop done; phone not yet):** a *container* is a timed segment holding one or more playlists (manual or dynamic) in order, with a time limit; a *sequence* is an ordered list of containers (the same container may appear more than once) that plays them one after another and then stops (example: warm-up 5 min low BPM, main 20 min high BPM, cool-down 5 min low BPM, then stop).
   - **Decisions (user, 2026-10-16):** defaults accepted. The clock runs only while playing; at the limit the track fades out over 3 s (per container: fade / cut / finish the track) and the next section starts; playlists in a container play in the listed order and it starts again from the first playlist if they run out (alternative: go on early); no limit = play through once; a container that holds a dynamic playlist **must** have a time limit (a dynamic playlist never ends); a sequence holds containers only (not plain playlists); at the end play stops ("Sequence complete.").
   - **Built:** schema version 5 (`playlist.kind` manual/dynamic/container/sequence, `limit_seconds`, `end_mode`, `when_empty`; table `playlist_member`; backup `json/tags.db.bak-before-containers`; an older database is migrated the first time the editor or player opens it; `build_tag_db.py` creates the new schema). `TagDb`: `kinds`, `container_info`, `members`, `used_in`, `create_container`/`update_container`, `create_sequence`/`update_sequence`, `container_tracks`, with validation. `desktop/containers.py` (`Section`, `Schedule`: clock, limit, fade factor, advance; no Qt). `playlists.py`: New container... / New sequence... / Edit... (ContainerDialog, SequenceDialog, OrderedPicker), list shows ▣ container (limit, playlists) and ⇉ sequence (sections, total time), members listed in the entries pane, add-to-playlist menu offers plain playlists only, delete warns when a playlist is used elsewhere; double-click a section of a sequence plays from it. Player: `play_schedule`, section clock fed from the listening count, fade via the volume, Playback > Next section (Ctrl+Shift+Right), Stop ends a schedule, label under the track title ("Main (2/3) — 14:31 left — 19:31 in all"). Tested headless on copies (clock, fade, cut, finish, sequence complete, pause stops the clock, dialogs).

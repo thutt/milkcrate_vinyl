@@ -169,7 +169,10 @@ def sync_network(args) -> int:
             )
             return 1
     print("Database on the phone: merged and current.")
-    with open(LINK_FILE, "w") as f:
+    # (the codes are kept for this user only)
+    with os.fdopen(
+        os.open(LINK_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+    ) as f:
         json.dump(
             {
                 "recent": phone_link.remember(

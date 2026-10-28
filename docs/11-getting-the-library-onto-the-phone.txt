@@ -151,6 +151,25 @@ Music copying
         file that is not the primary is skipped and listed
   * Songs removed from the library are not deleted from the phone.
 
+Safety of the sync
+------------------
+
+The sync is meant for a network you trust (your own Wi-Fi, or USB
+tethering).  The phone's server runs only while sync is started in the app,
+and every request must carry the pairing code.
+  * The code is sent as it is, and the data is not encrypted: anybody who
+    can watch the network traffic while you sync can read the code and the
+    files.  Do not sync on a shared or public Wi-Fi.  "New code" in the
+    app changes the code.
+  * Five wrong codes lock the server until sync is stopped and started
+    again.
+  * A connection that stops sending its request is closed after 20 seconds;
+    one address can have 8 connections open, and all together 64.
+  * A file that would leave less than 50 MB free on the phone is refused.
+  * The desktop keeps the codes of the phones it knows in its settings file
+    and, for sync_phone.py, in phone-link.json next to the database; both
+    are readable by your user only.
+
 Reviewing what the phone changed
 --------------------------------
 

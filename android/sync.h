@@ -26,6 +26,7 @@
 // It runs in its own thread, like the playback engine, so it keeps going while
 // the phone is locked.
 #pragma once
+#include <QHash>
 #include <QObject>
 #include <QStringList>
 #include <QTcpServer>
@@ -55,5 +56,8 @@ private:
     QUdpSocket *m_discovery = nullptr;
     QString m_db, m_root, m_code;
     int m_failures = 0, m_files = 0, m_ringtones = 0;
+    int m_sessions = 0;                // connections open now
+    QHash<QString, int> m_perPeer;     // ... from each address
+    static constexpr int MaxSessions = 64, MaxPerPeer = 8;
     qint64 m_bytes = 0;
 };
