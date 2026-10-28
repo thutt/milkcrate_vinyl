@@ -93,6 +93,11 @@ public:
     double bpm() const { return m_bpm; }
     bool playing() const { return m_engine->playing; }
     qint64 position() const { return m_engine->position; }
+    // The bars: how loud the low (0), middle (1) and high (2) parts of the
+    // sound are, 0 to 1, and whether they are being measured now (they are
+    // when the sound goes through the equalizer path).  Polled by the bars.
+    Q_INVOKABLE double level(int band) const;
+    Q_INVOKABLE bool levelsLive() const;
     qint64 duration() const { return m_engine->duration; }
     // A dynamic playlist plays in its own order: shuffling it makes little
     // sense, so the shuffle is off (and cannot be switched on) while one plays.

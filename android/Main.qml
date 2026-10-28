@@ -200,40 +200,98 @@ ApplicationWindow {
         }
     }
 
-    // Three bars that glide to random heights, in time with the song's BPM,
-    // while music plays and deflate to the lowest height when paused.
+    // Three bars beside the song that plays.  Each shows how loud one part of
+    // the sound is: the low, the middle and the high.  The levels are measured
+    // from the sound itself (player.level) while it goes through the equalizer
+    // path.  With the equalizer off nothing is measured, and the bars glide to
+    // random heights in time with the song's BPM instead.  A bar rises at once
+    // and falls at a steady speed; paused, the bars deflate to the lowest
+    // height.
     component Equalizer: Item {
         id: eq
         property bool running: false
+        property bool live: false    // the levels are being measured
+        readonly property real lowest: 3
+        readonly property real highest: 22
         Layout.preferredWidth: 22; Layout.preferredHeight: 22
+        onRunningChanged: {
+            for (var i = 0; i < 3; ++i) {
+                var b = bars.itemAt(i)
+                if (!b) continue
+                if (running) b.stopMotion()
+                else b.startDeflate()
+            }
+        }
+        // the levels, read about thirty times a second
+        Timer {
+            interval: 33
+            repeat: true
+            running: eq.running
+            triggeredOnStart: true
+            onTriggered: {
+                eq.live = player.levelsLive()
+                if (!eq.live) return
+                for (var i = 0; i < 3; ++i)
+                    bars.itemAt(i).follow(player.level(i))
+            }
+        }
         Row {
             anchors.bottom: parent.bottom
             spacing: 3
             Repeater {
+                id: bars
                 model: 3
                 Rectangle {
                     id: bar
                     width: 5; radius: 1
-                    color: Material.accent
+                    // the accent's hue a little deeper than the accent itself,
+                    // so that the tip can be a clearly more intense shade of
+                    // the same colour (a lighter one would be white)
+                    color: Qt.hsla(Material.accent.hslHue, 0.75,
+                                   window.dark ? 0.50 : 0.30, 1)
                     anchors.bottom: parent.bottom
                     height: 3
-                    // the part above 15 px is red, like the peak of a meter
+                    // the part above 15 px is the same hue at full
+                    // saturation, like the peak of a meter
                     Rectangle {
                         anchors.top: parent.top
                         width: parent.width; radius: 1
                         height: Math.max(0, parent.height - 15)
-                        color: "#e53935"
+                        color: Qt.hsla(Material.accent.hslHue, 1.0,
+                                       window.dark ? 0.62 : 0.48, 1)
                     }
-                    // Playing: glide to a new random height; the farther it
-                    // goes, the longer it takes, so a big jump is not abrupt.
+                    function stopMotion() {
+                        glide.stop()
+                        deflate.stop()
+                    }
+                    // Paused: fall to the lowest height at a steady speed, the
+                    // way a real display does.
+                    function startDeflate() {
+                        deflate.duration = 100 + (bar.height - 3) * 45
+                        deflate.restart()
+                    }
+                    // Measured: rise at once to the level, fall 0.9 px a tick.
+                    function follow(level) {
+                        stopMotion()
+                        var to = eq.lowest + level * (eq.highest - eq.lowest)
+                        height = to > height ? height + (to - height) * 0.6
+                                             : Math.max(to, height - 0.9)
+                    }
+                    Connections {
+                        target: eq
+                        function onLiveChanged() {
+                            if (eq.live) bar.stopMotion()
+                        }
+                    }
+                    // Not measured: glide to a new random height; the farther
+                    // it goes, the longer it takes, so a big jump is not
+                    // abrupt.
                     NumberAnimation {
                         id: glide
                         target: bar
                         property: "height"
                         easing.type: Easing.InOutQuad
                     }
-                    // Paused: fall to the lowest height at a steady speed, the
-                    // way a real display does.
                     NumberAnimation {
                         id: deflate
                         target: bar
@@ -245,7 +303,7 @@ ApplicationWindow {
                     // beat, twice a beat, three times in four), so they stay
                     // in time with the song and still do not move together.
                     Timer {
-                        running: eq.running
+                        running: eq.running && !eq.live
                         repeat: true
                         triggeredOnStart: true
                         interval: 140
@@ -260,15 +318,6 @@ ApplicationWindow {
                                 step * 0.85)
                             glide.restart()
                             interval = step
-                        }
-                        onRunningChanged: {
-                            if (running) {
-                                deflate.stop()
-                            } else {
-                                glide.stop()
-                                deflate.duration = 100 + (bar.height - 3) * 45
-                                deflate.restart()
-                            }
                         }
                     }
                 }

@@ -26,6 +26,7 @@
 #include <QStandardPaths>
 #include <QThreadPool>
 #include <algorithm>
+#include <chrono>
 
 #ifdef Q_OS_ANDROID
 #include <QCoreApplication>
@@ -472,6 +473,20 @@ void Player::setShuffle(bool on) {
     m_settings.setValue("shuffle", on);
     onEngine([e = m_engine, on] { e->setShuffle(on); });
     emit shuffleChanged();
+}
+
+double Player::level(int band) const {
+    return band >= 0 && band < BandMeter::Bands ? double(m_engine->level[band])
+                                                : 0.0;
+}
+
+bool Player::levelsLive() const {
+    qint64 at = m_engine->levelAt;
+    if (at == 0) return false;
+    qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now().time_since_epoch())
+                     .count();
+    return now - at < 400;
 }
 
 void Player::pushVolume() {

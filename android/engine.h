@@ -27,6 +27,7 @@
 #include <QVector>
 #include <atomic>
 
+#include "bandmeter.h"
 #include "eqpresets.h"
 #include "equalizer.h"
 #include "playlists.h"
@@ -38,6 +39,12 @@ public:
     std::atomic<qint64> position{0},
         duration{0};  // polled by the main thread (no event per tick)
     std::atomic<bool> playing{false};
+    // How loud the low, middle and high parts of the sound are (0 to 1) and
+    // when they were measured (milliseconds of the steady clock, 0: never),
+    // for the three bars beside the song; polled by the main thread.  They
+    // are measured from the sound that goes through the equalizer path.
+    std::atomic<float> level[BandMeter::Bands] = {{0}, {0}, {0}};
+    std::atomic<qint64> levelAt{0};
     QString sectionText() const;  // "Warmup (1/3) — 4:12 left — 12:12 in all",
                                   // empty when no schedule plays
 
@@ -214,6 +221,8 @@ private:
     QMediaDevices *m_devices = nullptr;
     QByteArray m_eqQueue;  // 16-bit stereo waiting for the sink
     int m_sourceRate = 0, m_sinkRate = 0;
+    BandMeter m_bands;
+    void publishLevels();
     double m_resamplePos = 0;  // position of the next output sample, in input
                                // samples after m_last
     float m_last[2] = {0, 0};

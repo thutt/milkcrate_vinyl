@@ -21,6 +21,7 @@
 #include <QRandomGenerator>
 #include <QUrl>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #ifdef Q_OS_ANDROID
@@ -230,6 +231,9 @@ void Engine::flushAudio() {
     m_sinceBuffer.invalidate();
     m_eqQueue.clear();
     m_eq.reset();
+    m_bands.reset();
+    for (auto &l : level) l = 0;
+    levelAt = 0;
     m_resamplePos = 0;
     m_last[0] = m_last[1] = 0;
     // A new sink (and with it a new AudioTrack) for each song, as the player's
@@ -292,6 +296,14 @@ void Engine::openSink(int sourceRate) {
     m_resamplePos = 0;
     m_eq.configure(sourceRate, eqGains());
     m_eq.reset();
+}
+
+void Engine::publishLevels() {
+    if (!m_bands.takeFresh()) return;
+    for (int b = 0; b < BandMeter::Bands; ++b) level[b] = m_bands.level(b);
+    levelAt = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch())
+                  .count();
 }
 
 void Engine::drainSink() {
@@ -359,12 +371,16 @@ void Engine::onAudioBuffer(const QAudioBuffer &buffer) {
     // stereo float, with the volume (ramped across the buffer, not stepped)
     QVector<float> pcm(frames * 2);
     float from = m_gainFrom, to = m_gain;
+    m_bands.setRate(rate);
     for (int f = 0; f < frames; ++f) {
         float g = from + (to - from) * float(f) / float(frames);
-        pcm[f * 2] = sampleAt(buffer, f, 0) * g;
-        pcm[f * 2 + 1] = sampleAt(buffer, f, 1) * g;
+        float left = sampleAt(buffer, f, 0), right = sampleAt(buffer, f, 1);
+        m_bands.add(0.5f * (left + right));  // the song, not the volume
+        pcm[f * 2] = left * g;
+        pcm[f * 2 + 1] = right * g;
     }
     m_gainFrom = to;
+    publishLevels();
     m_eq.process(pcm.data(), frames);
     // resample when the device does not take the source's rate (linear)
     QVector<float> out;

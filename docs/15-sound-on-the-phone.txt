@@ -91,11 +91,27 @@ The bars
 --------
 
 The three bars beside the playing song (in the song list and on the
-playlist row) move in time with the song: each bar picks a new random
-height every beat, every half beat or every three quarters of a beat,
-using the song's BPM tag.  A song with a BPM of 0, or none, is taken as 100;
-values are kept between 40 and 240.  The top of a tall bar is red.
+playlist row) show the sound of the song itself: the left bar how loud the
+low part is (below 250 Hz), the middle bar the middle part (250 Hz to
+4 kHz) and the right bar the high part (above 4 kHz).  They are measured
+about thirty times a second from the sound before the volume and the
+equalizer change it, so the volume does not make the bars smaller.  A bar
+rises at once and falls at a steady speed.  Each part is compared with the
+loudest part of the last seconds, after the bass has been taken down and
+the treble taken up as music needs (it has far more energy in the bass),
+so a drum moves the left bar, a voice the middle one, cymbals the right
+one, and a song that is quiet for a while shows low bars.  The top of a
+tall bar, above 15 pixels, is the same blue at full saturation, a clearly
+more intense shade; the rest of the bar is a slightly deeper shade of the
+accent colour so that the two can be told apart.
 Paused, the bars sink slowly to their lowest height.
+
+The sound is measured while it goes through the equalizer path, that is,
+with the equalizer on.  With the equalizer off nothing is measured, and the
+bars glide to random heights in time with the song's BPM tag instead: each
+bar picks a new height every beat, every half beat or every three quarters
+of a beat; a song with a BPM of 0, or none, is taken as 100; values are
+kept between 40 and 240.
 
 Saved presets
 -------------
