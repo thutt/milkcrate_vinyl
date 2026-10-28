@@ -112,5 +112,14 @@ The playlist "Track Samples"
 
 The player's Samples tab (10) makes this playlist itself, the first time
 a snippet is saved, and adds every snippet to it.  It is an ordinary
-static playlist: it can be played, reordered, renamed or emptied.  If it
-is renamed, the next snippet makes a new one.
+static playlist on the desktop: it can be played, reordered, emptied,
+renamed or deleted.  If it is renamed or deleted, the next snippet makes a
+new one.
+
+The name is reserved for the Samples tab: nobody can give it to a playlist,
+a dynamic playlist, a container or a sequence, by creating one or by
+renaming (case and spaces at the ends do not matter), and the player says
+so.  The playlist is not copied to the phone: the sync leaves it out of the
+database it sends (the desktop's own database keeps it), and a copy that
+the phone has from an earlier sync is gone after the next one.  The phone
+gets the snippets as songs and as ringtones (11).

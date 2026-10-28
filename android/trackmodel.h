@@ -48,6 +48,9 @@ struct QueueItem {
                          // the song starts
 };
 
+// "Plays: 3  ·  Last played: 2 days ago" (or "never"), the line under a song.
+QString songStatText(const SongStat &stat);
+
 class TrackModel : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(int count READ rowCount NOTIFY countChanged)

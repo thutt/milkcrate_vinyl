@@ -22,9 +22,10 @@ import subprocess
 import library_scan
 import loudness_measure
 import tagio
+from schema import RESERVED_PLAYLIST
 
 SAMPLES_DIR = "Track Samples"
-PLAYLIST = "Track Samples"
+PLAYLIST = RESERVED_PLAYLIST
 MIN_LENGTH_MS = 100
 
 
@@ -99,7 +100,7 @@ def _playlist(db) -> int:
     for pid, name, _count in db.playlists():
         if name == PLAYLIST and kinds.get(pid) == "manual":
             return pid
-    return db.create_playlist(PLAYLIST)
+    return db.create_playlist(PLAYLIST, reserved=True)
 
 
 def save(db, root: str, path: str, start_ms: int, end_ms: int):

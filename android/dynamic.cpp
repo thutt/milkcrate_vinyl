@@ -440,6 +440,10 @@ static QHash<qint64, QString> explainWith(const QJsonObject &rules,
     };
     walk(rules);
     if (sort != "random" && !order.contains(sort)) order << sort;
+    // The rating and the last play are said for every song, whether or not
+    // the rules test them, as the Songs tab does.
+    for (const char *f : {"rating", "last_played"})
+        if (!order.contains(f)) order << f;
     static const QHash<QString, QString> labels = {
         {"genre", "Genre"},   {"composer", "Composer"}, {"year", "Year"},
         {"bpm", "BPM"},       {"bpm_reliability", "BPM reliability"},
@@ -516,6 +520,7 @@ QHash<qint64, QString> explainTracks(const QString &dbPath, qint64 playlistId,
     collectFields(rules, fields);
     const QString sort = rules["sort"].toObject()["field"].toString("random");
     if (sort != "random") fields.insert(sort);
+    fields.insert("last_played");  // the plays of the whole song
     const QSet<qint64> wanted(ids.begin(), ids.end());
     QElapsedTimer clock;
     clock.start();
@@ -586,6 +591,7 @@ DynamicInfo dynamicInfo(const QString &dbPath, qint64 openId,
         const QString sort =
             rules["sort"].toObject()["field"].toString("random");
         if (sort != "random") fields.insert(sort);
+        fields.insert("last_played");  // for the lines about the open list
         lists.append({q.value(0).toLongLong(), rules});
     }
     if (lists.isEmpty()) return info;

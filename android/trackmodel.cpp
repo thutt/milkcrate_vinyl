@@ -44,10 +44,13 @@ QString searchKey(const QString &text) {
 
 // "Plays: 3  ·  Last played: 2 days ago"; empty until the stats are read.
 QString TrackModel::statText(QHash<qint64, SongStat>::const_iterator it) const {
-    if (it == m_stats.constEnd()) return {};
+    return it == m_stats.constEnd() ? QString() : songStatText(*it);
+}
+
+QString songStatText(const SongStat &stat) {
     QString when = "never";
     const QDateTime then =
-        QDateTime::fromString(it->last, "yyyy-MM-ddTHH:mm:ssZ");
+        QDateTime::fromString(stat.last, "yyyy-MM-ddTHH:mm:ssZ");
     if (then.isValid()) {
         const qint64 days =
             QDateTime(then.date(), then.time(), Qt::UTC)
@@ -57,7 +60,7 @@ QString TrackModel::statText(QHash<qint64, SongStat>::const_iterator it) const {
                               days == 1 ? "" : "s");
     }
     return QString("Plays: %1  \u00b7  Last played: %2")
-        .arg(it->plays)
+        .arg(stat.plays)
         .arg(when);
 }
 

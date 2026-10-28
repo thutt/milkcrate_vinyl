@@ -22,6 +22,9 @@ next sync copies them too.
 Ringtones
 ---------
 
+The playlist "Track Samples" of the Samples tab (04) is not sent to the
+phone, and one that the phone has is removed: only the files go.
+
 Every file in the folder Track Samples is also copied, by the same sync, to
 the Ringtones folder of the phone's internal storage (/Ringtones), so that
 it can be chosen in the phone's sound settings (Settings > Sounds and

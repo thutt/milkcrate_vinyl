@@ -22,6 +22,8 @@ from schema import (
     PLAYLIST_COLUMNS,
     PLAYLIST_NAME_INDEX,
     PLAYLIST_SCHEMA,
+    RESERVED_PLAYLIST,
+    is_reserved_playlist_name,
     normalize_track_number,
 )
 
@@ -395,6 +397,7 @@ class TagDb:
     def create_dynamic(self, name: str, rules: dict) -> int:
         # A new dynamic playlist, filled at once; sqlite3.IntegrityError if the
         # name is taken.
+        self._check_name(name)
         error = dynamic_playlists.validate(rules)
         if error:
             raise ValueError(error)
@@ -666,6 +669,7 @@ class TagDb:
     ) -> int:
         # A new container; sqlite3.IntegrityError if the name is taken,
         # ValueError if it is not valid.
+        self._check_name(name)
         self._check_container(limit_seconds, end_mode, when_empty, playlist_ids)
         with self.con:
             pid = self.con.execute(
@@ -704,6 +708,7 @@ class TagDb:
     def create_sequence(self, name: str, container_ids: list[int]) -> int:
         # A new sequence of containers; sqlite3.IntegrityError if the name is
         # taken, ValueError if it is not valid.
+        self._check_name(name)
         self._check_sequence(container_ids)
         with self.con:
             pid = self.con.execute(
@@ -748,8 +753,20 @@ class TagDb:
             )
         )
 
-    def create_playlist(self, name: str) -> int:
-        # A new empty playlist; sqlite3.IntegrityError if the name is taken.
+    @staticmethod
+    def _check_name(name: str) -> None:
+        if is_reserved_playlist_name(name):
+            raise ValueError(
+                f"The name \u201c{RESERVED_PLAYLIST}\u201d is reserved for the"
+                " Samples tab and cannot be used."
+            )
+
+    def create_playlist(self, name: str, reserved: bool = False) -> int:
+        # A new empty playlist; sqlite3.IntegrityError if the name is taken,
+        # ValueError if it is the reserved name (reserved: the caller is the
+        # Samples tab, which makes that playlist).
+        if not reserved:
+            self._check_name(name)
         with self.con:
             return self.con.execute(
                 "INSERT INTO playlist (name, created) VALUES (?, ?)",
@@ -757,6 +774,7 @@ class TagDb:
             ).lastrowid
 
     def rename_playlist(self, playlist_id: int, name: str) -> None:
+        self._check_name(name)
         with self.con:
             self.con.execute(
                 "UPDATE playlist SET name = ? WHERE id = ?", (name, playlist_id)

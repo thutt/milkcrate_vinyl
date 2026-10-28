@@ -51,14 +51,19 @@ QString formatClock(qint64 ms);
 class PlaylistModel : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
+    // How many groups the list has (sequences, containers, playlists): the
+    // headings are shown only when there is more than one.
+    Q_PROPERTY(int groups READ groups NOTIFY countChanged)
 public:
     enum Role {
         IdRole = Qt::UserRole + 1,
         NameRole,
         KindRole,
         DetailRole,
-        MatchedRole
+        MatchedRole,
+        GroupRole  // the heading it is under: a dynamic playlist is a playlist
     };
+    int groups() const;
     explicit PlaylistModel(QObject *parent = nullptr)
         : QAbstractListModel(parent) {}
     int rowCount(const QModelIndex &parent = {}) const override {
@@ -102,8 +107,14 @@ public:
     void setRating(qint64 id, int rating);  // a row shows it at once
     // why a dynamic playlist chose each entry
     void setDetails(const QHash<qint64, QString> &why);
+    // The plays of every song: the line under an entry of a playlist that is
+    // not dynamic (a dynamic one has the reason it was chosen there).
+    void setStats(const QHash<qint64, SongStat> &stats);
+    void setDynamic(bool dynamic);  // the playlist that is open
     const QVector<QueueItem> &items() const { return m_items; }
 
 private:
     QVector<QueueItem> m_items;
+    QHash<qint64, SongStat> m_stats;
+    bool m_dynamic = false;
 };

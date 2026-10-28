@@ -169,6 +169,16 @@ CREATE INDEX tag_name_value ON tag(name, value);
 """ + PLAYLIST_SCHEMA + PLAYLIST_NAME_INDEX + BPM_ANALYSIS_SCHEMA
 
 
+# The playlist that the player's Samples tab keeps its snippets in.  Nobody
+# can make a playlist of any kind with this name, and the sync leaves the
+# playlist out of the copy of the database that goes to the phone.
+RESERVED_PLAYLIST = "Track Samples"
+
+
+def is_reserved_playlist_name(name: str) -> bool:
+    return name.strip().casefold() == RESERVED_PLAYLIST.casefold()
+
+
 def normalize_track_number(value: str) -> str:
     # Track numbers are integers: drop leading zeros from every run of digits
     # ("01" -> "1", "01/03" -> "1/3",

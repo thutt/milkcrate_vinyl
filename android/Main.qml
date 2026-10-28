@@ -404,16 +404,17 @@ ApplicationWindow {
                 }
                 Stars { visible: row.playingNow }
             }
-            // the rating of the other songs: five stars, none when not rated
+            // the rating of the other songs: five stars, or "not rated"
             Label {
-                visible: !row.playingNow && row.rating >= 0
+                visible: !row.playingNow
                 Layout.alignment: Qt.AlignVCenter
                 Layout.rightMargin: 4
-                text: row.rating < 0 ? "" :
+                text: row.rating < 0 ? "not rated" :
                       "\u2605".repeat(row.rating) +
                       "\u2606".repeat(5 - row.rating)
-                font.pixelSize: 15
-                color: window.starColor
+                font.pixelSize: row.rating < 0 ? 12 : 15
+                opacity: row.rating < 0 ? 0.65 : 1
+                color: row.rating < 0 ? Material.foreground : window.starColor
             }
         }
     }
@@ -429,10 +430,16 @@ ApplicationWindow {
                 onClicked: entriesOpen = false
             }
             Label {
-                visible: tab === 1
+                visible: tab === 1 && entriesOpen
                 Layout.fillWidth: true
-                text: entriesOpen ? player.openName : "Playlists"
+                text: player.openName
                 font.pixelSize: 18; elide: Text.ElideRight
+            }
+            // the list of playlists has no title (the tab says what it is);
+            // the buttons stay at the right
+            Item {
+                visible: tab === 1 && !entriesOpen
+                Layout.fillWidth: true
             }
             // a dynamic playlist: how many library tracks its rules select
             Label {
@@ -568,13 +575,19 @@ ApplicationWindow {
             model: playlists
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { }
-            section.property: "kind"
+            // The headings keep the kinds apart.  A dynamic playlist is under
+            // "Playlists" too (grouping by kind printed that heading again
+            // each time the list went from a static to a dynamic playlist),
+            // and with only one kind the tab's name is heading enough.
+            section.property: "group"
             section.delegate: Label {
                 width: ListView.view.width
+                visible: playlists.groups > 1
+                height: visible ? implicitHeight : 0
                 leftPadding: 16; topPadding: 8; bottomPadding: 4
                 text: ({
                     sequence: "Sequences", container: "Containers",
-                    playlist: "Playlists", dynamic: "Playlists"
+                    playlist: "Playlists"
                 })[section]
                 font.pixelSize: 13; font.bold: true; opacity: 0.6
             }
@@ -667,7 +680,8 @@ ApplicationWindow {
                 sub: artist + (album ? "  ·  " + album : "")
                 rating: model.rating
                 detail: model.detail
-                reserve: player.openDynamic
+                reserve: true
+                detailHeight: player.openDynamic ? 34 : 20
                 onClicked: player.playEntry(index)
             }
         }

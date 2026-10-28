@@ -765,6 +765,7 @@ void Player::playPlaylist(int row) {
 void Player::openPlaylist(int row) {
     const PlaylistInfo *p = m_playlists.atRow(row);
     if (!p) return;
+    m_entries.setDynamic(p->kind == "dynamic");
     showEntries(p->id);
     m_openName = p->name;
     m_openId = p->id;
@@ -811,6 +812,7 @@ void Player::nextSection() {
 // background and added to the rows when it is ready.
 void Player::showEntries(qint64 id) {
     m_entries.setItems(playlistItems(m_dbPath, id));
+    m_entries.setStats(m_model.stats());
     QList<qint64> ids;
     for (const QueueItem &t : m_entries.items()) ids << t.id;
     if (ids.isEmpty()) return;
@@ -885,6 +887,7 @@ void Player::refreshInfo(bool lists) {
                 }
                 m_playlists.setMatched(info.matched);
                 m_model.setStats(info.stats);
+                m_entries.setStats(info.stats);
                 if (open >= 0 && open == m_openId) {
                     if (!info.why.isEmpty()) m_entries.setDetails(info.why);
                     const int n = info.matched.value(open, -1);

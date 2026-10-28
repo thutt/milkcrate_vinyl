@@ -7,6 +7,7 @@
 #include "playlists.h"
 #include "dynamic.h"
 
+#include <QSet>
 #include <QSqlDatabase>
 #include <algorithm>
 #include <functional>
@@ -259,6 +260,7 @@ QVariant PlaylistModel::data(const QModelIndex &index, int role) const {
         case KindRole: return p->kind;
         case DetailRole: return p->detail;
         case MatchedRole: return p->matched;
+        case GroupRole: return p->kind == "dynamic" ? "playlist" : p->kind;
     }
     return {};
 }
@@ -268,7 +270,8 @@ QHash<int, QByteArray> PlaylistModel::roleNames() const {
             {NameRole, "name"},
             {KindRole, "kind"},
             {DetailRole, "detail"},
-            {MatchedRole, "matched"}};
+            {MatchedRole, "matched"},
+            {GroupRole, "group"}};
 }
 
 void PlaylistModel::setMatched(const QHash<qint64, int> &counts) {
@@ -278,6 +281,13 @@ void PlaylistModel::setMatched(const QHash<qint64, int> &counts) {
         m_items[row].matched = *it;
         emit dataChanged(index(row), index(row), {MatchedRole});
     }
+}
+
+int PlaylistModel::groups() const {
+    QSet<QString> found;
+    for (const PlaylistInfo &p : m_items)
+        found.insert(p.kind == "dynamic" ? QString("playlist") : p.kind);
+    return found.size();
 }
 
 void PlaylistModel::setItems(const QList<PlaylistInfo> &items) {
@@ -300,10 +310,22 @@ QVariant EntryModel::data(const QModelIndex &index, int role) const {
         case ArtistRole: return t.artist;
         case AlbumRole: return t.album;
         case RatingRole: return t.rating;
-        case DetailRole: return t.detail;
+        case DetailRole: {
+            if (m_dynamic || !t.detail.isEmpty()) return t.detail;
+            auto it = m_stats.constFind(t.id);
+            return it == m_stats.constEnd() ? QString() : songStatText(*it);
+        }
     }
     return {};
 }
+
+void EntryModel::setStats(const QHash<qint64, SongStat> &stats) {
+    m_stats = stats;
+    if (!m_items.isEmpty())
+        emit dataChanged(index(0), index(m_items.size() - 1), {DetailRole});
+}
+
+void EntryModel::setDynamic(bool dynamic) { m_dynamic = dynamic; }
 
 QHash<int, QByteArray> EntryModel::roleNames() const {
     return {{IdRole, "trackId"},

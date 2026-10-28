@@ -83,6 +83,9 @@ def create_playlist(parent: QWidget, db) -> int | None:
             f"There is already a playlist named “{name}”.",
         )
         return None
+    except ValueError as e:  # the reserved name
+        QMessageBox.warning(parent, "New playlist", str(e))
+        return None
 
 
 class RuleRow(QWidget):
@@ -740,8 +743,7 @@ class PlaylistPanel(QWidget):
         upper = QWidget()
         top_layout = QVBoxLayout(upper)
         top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.addWidget(QLabel("Playlists"))
-        top_layout.addWidget(self.lists, 1)
+        top_layout.addWidget(self.lists, 1)  # (the tab says "Playlists")
         top_layout.addLayout(list_buttons)
         dynamic_buttons = QHBoxLayout()
         for b in (
@@ -1235,6 +1237,9 @@ class PlaylistPanel(QWidget):
             QMessageBox.warning(
                 self, "Rename", f"There is already one named “{name}”."
             )
+            return
+        except ValueError as e:  # the reserved name
+            QMessageBox.warning(self, "Rename", str(e))
             return
         self.refresh(select=pid)
         self.changed.emit(-1)

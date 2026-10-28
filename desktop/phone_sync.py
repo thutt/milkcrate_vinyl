@@ -27,6 +27,8 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 
+from schema import is_reserved_playlist_name
+
 
 @dataclass
 class Report:
@@ -138,6 +140,30 @@ def merge(db, phone_path: str) -> Report:
     return report
 
 
+def strip_reserved_playlist(con: sqlite3.Connection) -> None:
+    # The playlist of the Samples tab stays on the desktop: the phone gets the
+    # snippets as songs (and as ringtones), not the playlist, and a copy of it
+    # that the phone already has goes with the database that replaces its own.
+    # Only a manual playlist of that name is removed.
+    for pid, name in list(
+        con.execute(
+            "SELECT id, name FROM playlist WHERE rules IS NULL AND kind NOT IN"
+            " ('container', 'sequence')"
+        )
+    ):
+        if is_reserved_playlist_name(name):
+            con.execute(
+                "DELETE FROM playlist_item WHERE playlist_id = ?", (pid,)
+            )
+            con.execute(
+                "DELETE FROM playlist_member WHERE parent_id = ? OR"
+                " child_id = ?",
+                (pid, pid),
+            )
+            con.execute("DELETE FROM playlist WHERE id = ?", (pid,))
+    con.commit()
+
+
 def merge_and_snapshot(
     db, pulled: str | None, tmp: str, backup: str | None = None
 ) -> tuple[str, Report]:
@@ -157,6 +183,7 @@ def merge_and_snapshot(
     snapshot = os.path.join(tmp, "tags.db")
     out = sqlite3.connect(snapshot)
     db.con.backup(out)
+    strip_reserved_playlist(out)
     out.execute("PRAGMA journal_mode = DELETE")
     out.close()
     return snapshot, report
