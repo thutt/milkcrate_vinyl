@@ -11,6 +11,7 @@
 #pragma once
 #include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QVector>
 #include <QObject>
 #include <QSettings>
@@ -127,6 +128,17 @@ public:
     // saves the current settings under a name; returns "" or why it cannot
     Q_INVOKABLE QString saveEqPreset(const QString &name);
     Q_INVOKABLE void deleteEqPreset(const QString &name);
+    // The Bluetooth output now in use: address, name, the volume step kept for
+    // it (-1: none), the step now set and the greatest step; empty when the
+    // sound does not go to Bluetooth.
+    Q_INVOKABLE QVariantMap bluetooth() const;
+    Q_INVOKABLE void keepBluetoothVolume();
+    // the full-screen player over the lock screen
+    Q_INVOKABLE bool lockPlayerOn() const;
+    Q_INVOKABLE void setLockPlayerOn(bool on);
+    Q_INVOKABLE bool lockPlayerAllowed() const;  // Android lets it show
+    Q_INVOKABLE void lockPlayerSettings();       // where to allow it
+    Q_INVOKABLE void forgetBluetoothVolume(const QString &address);
     QString dbPath() const { return m_dbPath; }
     QString musicRoot() const { return m_root; }
     QString message() const { return m_message; }
@@ -157,6 +169,12 @@ public:
     Q_INVOKABLE void rate(int stars);  // the playing track: 0 to 5 stars; the
                                        // star that is set again gives zero
     Q_INVOKABLE void clearRating();    // not rated
+    // The songs played in the last days, the latest first, each a map (id,
+    // title, artist, album, rating, played, plays), to look over after a
+    // drive; only the ones not rated when onlyUnrated.
+    Q_INVOKABLE QVariantList recentSongs(int days, bool onlyUnrated) const;
+    // Rates any song (a star pressed again takes it off); the rating now.
+    Q_INVOKABLE int rateSong(qint64 id, int stars);
     Q_INVOKABLE void
     startSync();  // wait for the desktop (tools/sync_phone.py), see sync.h
     Q_INVOKABLE void stopSync();
@@ -179,6 +197,7 @@ public:
     Q_INVOKABLE void previous();
     Q_INVOKABLE void seek(qint64 ms);
 signals:
+    void statsChanged();  // the plays of the songs were read again
     void currentChanged();
     void bpmChanged();
     void playingChanged();
@@ -233,6 +252,7 @@ private:
     QString m_dbPath, m_root, m_message;
     QString m_title, m_artist, m_album;
     qint64 m_currentId = -1;
+    void pushLockDetail();  // the lock screen player's line about the song
     double m_bpm = 100;  // the song's BPM tag; 100 when it has none
     qint64 m_playingList = -1;  // the playlist, container or sequence the music
                                 // comes from; -1 = the Songs tab

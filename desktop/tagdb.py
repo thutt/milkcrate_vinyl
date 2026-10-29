@@ -237,6 +237,12 @@ class TagDb:
                 self.con.execute(
                     "ALTER TABLE media_file ADD COLUMN stats_modified TEXT"
                 )
+            if "listened_ms" not in {
+                r[1] for r in self.con.execute("PRAGMA table_info(media_file)")
+            }:
+                self.con.execute(
+                    "ALTER TABLE media_file ADD COLUMN listened_ms INTEGER"
+                )
             if "removed_at" not in {
                 r[1]
                 for r in self.con.execute("PRAGMA table_info(playlist_item)")
@@ -431,7 +437,9 @@ class TagDb:
         rules = self.get_rules(playlist_id)
         if rules is None:
             return
-        chosen = dynamic_playlists.matches(self, rules)[: self.dynamic_length()]
+        chosen = dynamic_playlists.matches(self, rules, distinct=True)[
+            : self.dynamic_length()
+        ]
         with self.con:
             self.con.execute(
                 "DELETE FROM playlist_item WHERE playlist_id = ?",
@@ -533,9 +541,9 @@ class TagDb:
         exclude = set(entries) | {
             self.path_of[f] for f in played if f in self.path_of
         }
-        new = dynamic_playlists.matches(self, rules, exclude, songs)[
-            : max(missing, 0)
-        ]
+        new = dynamic_playlists.matches(
+            self, rules, exclude, songs, distinct=True
+        )[: max(missing, 0)]
         with self.con:
             (end,) = self.con.execute(
                 "SELECT COALESCE(MAX(pos) + 1, 0) FROM playlist_item WHERE"

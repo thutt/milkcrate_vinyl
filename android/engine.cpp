@@ -126,6 +126,66 @@ void Engine::setEqualizer(bool on, const QVector<double> &gains,
         chooseEqPreset();
     }
     applyEqGains();
+    pushEqName();
+}
+
+QString Engine::eqName() const {
+    if (!m_eqOn) return "EQ off";
+    QString shown = "Custom";
+    for (int i = 0; i < eqPresetCount && shown == "Custom"; ++i)
+        if (std::equal(m_eqGains.begin(), m_eqGains.end(), eqPresets[i].gains))
+            shown = eqPresets[i].name;
+    for (const CustomEq &c : m_customs)
+        if (shown == "Custom" && c.gains == m_eqGains) shown = c.name;
+    const bool chosen = m_eqAuto && !m_autoName.isEmpty();
+    return "EQ: " + (chosen ? m_autoName : shown) + (chosen ? " (auto)" : "");
+}
+
+void Engine::pushEqName() const {
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/LockPlayerActivity", "setEqualizerName",
+        "(Ljava/lang/String;)V",
+        QJniObject::fromString(eqName()).object<jstring>());
+#endif
+}
+
+void Engine::lockAdjust(int what, int index, double value) {
+    QVector<double> gains = m_eqGains;
+    bool automatic = m_eqAuto;
+    if (what == 0) {
+        automatic = !automatic;
+    } else if (what == 1) {
+        if (index < 0 || index >= gains.size()) return;
+        gains[index] = std::clamp(value, -12.0, 12.0);
+    } else if (what == 2) {
+        // the built-in presets, then the saved ones, as the dialog steps
+        QStringList names;
+        QVector<QVector<double>> all;
+        for (int i = 0; i < eqPresetCount; ++i) {
+            names << eqPresets[i].name;
+            all << QVector<double>(eqPresets[i].gains, eqPresets[i].gains + 5);
+        }
+        for (const CustomEq &c : m_customs) {
+            names << c.name;
+            all << c.gains;
+        }
+        if (names.isEmpty()) return;
+        QString shown = m_autoName;
+        if (!(m_eqAuto && !shown.isEmpty())) {
+            shown = "Custom";
+            for (int i = 0; i < all.size() && shown == "Custom"; ++i)
+                if (all[i] == m_eqGains) shown = names[i];
+        }
+        int at = names.indexOf(shown);
+        const int count = names.size();
+        // "Custom" is not in the list: go to the first or last
+        at = at < 0 ? (index > 0 ? 0 : count - 1)
+                    : (at + index + count) % count;
+        gains = all[at];
+    }
+    setEqualizer(m_eqOn, gains, automatic, m_customs);
+    emit eqAdjusted(automatic, gains);
 }
 
 // The song keeps playing through the sink after the equalizer is turned off
@@ -133,7 +193,7 @@ void Engine::setEqualizer(bool on, const QVector<double> &gains,
 // gains.
 const double *Engine::eqGains() const {
     static const double flat[Equalizer::Bands] = {0, 0, 0, 0, 0};
-    if (!m_eqOn) return flat;
+    if (!m_eqOn || bypassed) return flat;
     return m_eqAuto && m_autoChosen ? m_autoGains.constData()
                                     : m_eqGains.constData();
 }
@@ -160,6 +220,7 @@ void Engine::chooseEqPreset() {
         }
     }
     emit eqChosen(m_autoName);
+    pushEqName();
 }
 
 // The engine thread also feeds the sound; time spent waiting here is time the
@@ -210,7 +271,9 @@ void Engine::flushAudio() {
     m_eqQueue.clear();
     m_eq.reset();
     m_bands.reset();
+    m_spectrum.reset();
     for (auto &l : level) l = 0;
+    for (auto &l : spectrum) l = 0;
     levelAt = 0;
     m_resamplePos = 0;
     m_last[0] = m_last[1] = 0;
@@ -277,6 +340,15 @@ void Engine::openSink(int sourceRate) {
 }
 
 void Engine::publishLevels() {
+    autoOn = m_eqAuto;
+    autoLocked = m_eqAuto && m_autoChosen;
+    if (m_spectrum.takeFresh()) {
+        const double *gains = eqGains();
+        for (int b = 0; b < SpectrumMeter::Bands; ++b)
+            shownGain[b] = float(gains[b]);
+        for (int b = 0; b < SpectrumMeter::Levels; ++b)
+            spectrum[b] = m_spectrum.level(b);
+    }
     if (!m_bands.takeFresh()) return;
     for (int b = 0; b < BandMeter::Bands; ++b) level[b] = m_bands.level(b);
     levelAt = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -285,7 +357,9 @@ void Engine::publishLevels() {
 }
 
 void Engine::drainSink() {
-    if (m_sinceDrain.isValid() && m_sinceDrain.elapsed() > 150)
+    // a paused song feeds nothing, which is not a stall
+    bool playing = m_player->playbackState() == QMediaPlayer::PlayingState;
+    if (playing && m_sinceDrain.isValid() && m_sinceDrain.elapsed() > 150)
         qWarning("engine thread did not feed the sound for %lld ms",
                  m_sinceDrain.elapsed());
     m_sinceDrain.start();
@@ -350,10 +424,12 @@ void Engine::onAudioBuffer(const QAudioBuffer &buffer) {
     QVector<float> pcm(frames * 2);
     float from = m_gainFrom, to = m_gain;
     m_bands.setRate(rate);
+    m_spectrum.setRate(rate);
     for (int f = 0; f < frames; ++f) {
         float g = from + (to - from) * float(f) / float(frames);
         float left = sampleAt(buffer, f, 0), right = sampleAt(buffer, f, 1);
         m_bands.add(0.5f * (left + right));  // the song, not the volume
+        m_spectrum.add(0.5f * (left + right));
         pcm[f * 2] = left * g;
         pcm[f * 2 + 1] = right * g;
     }
@@ -493,6 +569,7 @@ void Engine::playCurrent() {
     m_artist = t.artist;
     m_album = t.album;
     m_phase = 0;  // a new song starts with its title
+    bypassed = false;
     m_measured = t.measured;
     m_loudness = t.loudness;
     applyVolume();
@@ -508,6 +585,7 @@ void Engine::playCurrent() {
     lap("rating");
     m_genres = t.genres;
     QString full = m_root + "/" + cleanPath(t.path);
+    m_file = full;
     if (!QFileInfo::exists(full)) {
         m_player->stop();
         m_player->setSource({});
@@ -702,6 +780,7 @@ void Engine::previous() {
               m_player->position());
         m_player->setPosition(0);
         flushAudio();
+        pushState();  // the service and the lock screen start again from 0
         return;
     }
     --m_pos;
@@ -721,9 +800,9 @@ void Engine::seek(qint64 ms) {
 
 // Commands from PlaybackService (what: 0 play, 1 pause, 2 next, 3 previous, 4
 // stop, 5 seek, 6 one star less (0 stars: unrated), 7 one star more (unrated: 0
-// stars)).
+// stars), 8 hear the equalizer flat, or again).
 void Engine::handleCommand(int what, qint64 argument) {
-    enum { Play, Pause, Next, Previous, Stop, Seek, StarDown, StarUp };
+    enum { Play, Pause, Next, Previous, Stop, Seek, StarDown, StarUp, Bypass };
     bool on = m_player->playbackState() == QMediaPlayer::PlayingState;
     switch (what) {
         case Play:
@@ -750,6 +829,13 @@ void Engine::handleCommand(int what, qint64 argument) {
             if (m_currentId >= 0 && m_rating >= 0)
                 setRating(m_currentId, m_rating - 1);
             break;  // 1 star becomes 0 stars, 0 stars becomes unrated
+        case Bypass:  // only while the sound goes through the equalizer
+            if (m_eqOn && m_eqRouted) {
+                bypassed = !bypassed;
+                applyEqGains();
+                qInfo("equalizer %s", bypassed ? "bypassed" : "heard again");
+            }
+            break;
         case StarUp:
             if (m_currentId >= 0 && m_rating < 5)
                 setRating(m_currentId, m_rating + 1);
@@ -771,10 +857,11 @@ void Engine::pushState(bool force) {
     QJniObject::callStaticMethod<void>(
         "org/musicplayer/player/PlaybackService", "update",
         "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;"
-        "Ljava/lang/String;ZJJII)V",
+        "Ljava/lang/String;Ljava/lang/String;ZJJII)V",
         context.object(), QJniObject::fromString(m_title).object<jstring>(),
         QJniObject::fromString(m_artist).object<jstring>(),
-        QJniObject::fromString(m_album).object<jstring>(), jboolean(playing),
+        QJniObject::fromString(m_album).object<jstring>(),
+        QJniObject::fromString(m_file).object<jstring>(), jboolean(playing),
         jlong(m_player->position()), jlong(m_player->duration()),
         jint(m_rating), jint(playing ? m_phase : 0));
 #endif
@@ -1169,7 +1256,51 @@ void Engine::finishTrack() {
     if (m_unmarkedId < 0) return;
     const qint64 id = m_unmarkedId;
     m_unmarkedId = -1;
+    if (!m_dbPath.isEmpty()) {
+        const qint64 heard = m_heard;  // after the play count's write
+        m_writes.start([this, path = m_dbPath, id, heard] {
+            writeListened(path, id, heard);
+        });
+    }
     markPlayed({id});
+}
+
+// How long the counted track was heard, for the desktop's review of what was
+// played.  A database from an older desktop has no column for it: the phone
+// adds it.
+void Engine::writeListened(const QString &path, qint64 id, qint64 heard) {
+    QMutexLocker lock(&dbLock());
+    const QString name = "heard-" + QUuid::createUuid().toString(QUuid::Id128);
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+        db.setDatabaseName(path);
+        db.setConnectOptions("QSQLITE_BUSY_TIMEOUT=3000");
+        if (db.open()) {
+            QSqlQuery q(db);
+            bool has = false;
+            q.exec("PRAGMA table_info(media_file)");
+            while (q.next())
+                if (q.value(1).toString() == "listened_ms") has = true;
+            q.exec("PRAGMA journal_mode = DELETE");
+            q.exec("PRAGMA synchronous = FULL");
+            if (!has)  // the desktop adds it too, when it opens the database
+                has = q.exec("ALTER TABLE media_file ADD COLUMN listened_ms "
+                             "INTEGER");
+            if (has) {
+                q.prepare("UPDATE media_file SET listened_ms = ?, "
+                          "stats_modified = ? WHERE id = ?");
+                q.addBindValue(heard);
+                q.addBindValue(QDateTime::currentDateTimeUtc().toString(
+                    "yyyy-MM-ddTHH:mm:ss.zzzZ"));
+                q.addBindValue(id);
+                if (!q.exec())
+                    qWarning("Cannot record the listening time: %s",
+                             qPrintable(q.lastError().text()));
+            }
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(name);
 }
 
 // Songs that were skipped (left before they counted as played) go off the

@@ -375,10 +375,14 @@ def _compile(db, group: dict, now: datetime, songs=None):
     return lambda p: combine(part(p) for part in parts)
 
 
-def matches(db, rules: dict, exclude=frozenset(), songs=None) -> list[str]:
+def matches(
+    db, rules: dict, exclude=frozenset(), songs=None, distinct=False
+) -> list[str]:
     # Every library file the rules select (never a duplicate, never one of
     # exclude), sorted as the rules say
-    # (random for "random").
+    # (random for "random").  With distinct, no two are the same song and none
+    # is the song of a file in exclude, the first in order standing for its
+    # song; for choosing what goes into a list, not for what fits its rules.
     error = validate(rules)
     if error:
         raise ValueError(error)
@@ -405,6 +409,16 @@ def matches(db, rules: dict, exclude=frozenset(), songs=None) -> list[str]:
     if prefer:  # stable: the order inside each file type stays as sorted
         rank = {fmt: n for n, fmt in enumerate(prefer)}
         chosen.sort(key=lambda p: rank.get(file_format(p), len(prefer)))
+    if distinct:
+        taken = {song_key(db, p) for p in exclude if p in db.tags}
+        keep = []
+        for p in chosen:
+            key = song_key(db, p)
+            if key in taken:
+                continue
+            taken.add(key)
+            keep.append(p)
+        chosen = keep
     return chosen
 
 

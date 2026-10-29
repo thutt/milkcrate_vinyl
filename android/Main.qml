@@ -31,7 +31,7 @@ ApplicationWindow {
             close.accepted = false
             entriesOpen = false
         }
-        else if (tab === 1) { close.accepted = false; tab = 0 }
+        else if (tab === 1 || tab === 2) { close.accepted = false; tab = 0 }
         // the top: hide the app like Home does (closing the window would leave
         // the music playing in an app that cannot be reopened)
         else if (Qt.platform.os === "android") {
@@ -40,7 +40,7 @@ ApplicationWindow {
         }
     }
 
-    property int tab: 0                       // 0 songs, 1 playlists
+    property int tab: 0       // 0 songs, 1 playlists, 2 recent plays
     // the app opens on the Playlists tab when there are playlists
     property bool startTabChosen: false
     // rows showing the playing song (they carry its stars)
@@ -438,7 +438,7 @@ ApplicationWindow {
             // the list of playlists has no title (the tab says what it is);
             // the buttons stay at the right
             Item {
-                visible: tab === 1 && !entriesOpen
+                visible: (tab === 1 && !entriesOpen) || tab === 2
                 Layout.fillWidth: true
             }
             // a dynamic playlist: how many library tracks its rules select
@@ -535,6 +535,155 @@ ApplicationWindow {
                 text: (player.playingList >= 0 ? "\u266B " : "") +
                       "Playlists (" + playlists.count + ")"
                 onClicked: entriesOpen = false
+            }
+            // what was played lately, to rate after a drive
+            TabButton { text: "Recent" }
+        }
+
+        // The songs played in the last days, to look over after a drive and
+        // to rate; "Not rated" leaves the ones that still need it.
+        ColumnLayout {
+            id: recentPage
+            visible: tab === 2
+            Layout.fillWidth: true; Layout.fillHeight: true
+            spacing: 0
+            property var songs: []
+            property int days: 1
+            property bool onlyUnrated: true
+            // the ratings given since the list was made
+            property var given: ({})
+            function refresh() {
+                given = ({})
+                songs = player.recentSongs(days, onlyUnrated)
+            }
+            onVisibleChanged: if (visible) refresh()
+            Connections {
+                target: player
+                function onStatsChanged() {
+                    if (recentPage.visible) recentPage.refresh()
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 8
+                spacing: 6
+                Repeater {
+                    model: [{ t: "24 hours", d: 1 }, { t: "3 days", d: 3 },
+                            { t: "Week", d: 7 }]
+                    Button {
+                        text: modelData.t
+                        flat: true
+                        highlighted: recentPage.days === modelData.d
+                        onClicked: {
+                            recentPage.days = modelData.d
+                            recentPage.refresh()
+                        }
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Switch {
+                    text: "Not rated"
+                    checked: recentPage.onlyUnrated
+                    onToggled: {
+                        recentPage.onlyUnrated = checked
+                        recentPage.refresh()
+                    }
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                Layout.margins: 12
+                visible: recentPage.songs.length === 0
+                text: recentPage.onlyUnrated
+                      ? "Nothing played in this time is still unrated."
+                      : "Nothing was played in this time."
+                wrapMode: Text.Wrap
+                opacity: 0.7
+            }
+            ListView {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true
+                model: recentPage.songs
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { }
+                delegate: ItemDelegate {
+                    id: recentRow
+                    width: ListView.view.width
+                    height: 92
+                    // (the stars' own repeater has a modelData of its own)
+                    readonly property var song: modelData
+                    // a rating given here shows at once; the list is made again
+                    // when its filter changes
+                    readonly property int stars:
+                        recentPage.given[modelData.id] !== undefined
+                        ? recentPage.given[modelData.id] : modelData.rating
+                    Column {
+                        anchors.left: parent.left; anchors.leftMargin: 14
+                        anchors.right: parent.right; anchors.rightMargin: 14
+                        anchors.top: parent.top; anchors.topMargin: 8
+                        spacing: 2
+                        Label {
+                            width: parent.width
+                            text: modelData.title
+                            elide: Text.ElideRight
+                            font.pixelSize: 16; font.bold: true
+                        }
+                        Label {
+                            width: parent.width
+                            text: modelData.artist +
+                                  (modelData.album
+                                   ? "  \u00b7  " + modelData.album : "")
+                            elide: Text.ElideRight
+                            font.pixelSize: 13; opacity: 0.65
+                        }
+                        Row {
+                            spacing: 0
+                            Label {
+                                width: 150
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.played
+                                elide: Text.ElideRight
+                                font.pixelSize: 12; opacity: 0.7
+                            }
+                            Repeater {
+                                model: 5
+                                Label {
+                                    text: index < recentRow.stars ? "\u2605"
+                                                                  : "\u2606"
+                                    font.pixelSize: 30
+                                    color: index < recentRow.stars
+                                           ? window.starColor
+                                           : Material.foreground
+                                    opacity: index < recentRow.stars ? 1 : 0.6
+                                    padding: 3
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: {
+                                            var id = recentRow.song.id
+                                            var now = player.rateSong(
+                                                id, index + 1)
+                                            // a new object: assigning the
+                                            // same one would tell nobody
+                                            var g = {}
+                                            for (var k in recentPage.given)
+                                                g[k] = recentPage.given[k]
+                                            g[id] = now
+                                            recentPage.given = g
+                                        }
+                                    }
+                                }
+                            }
+                            Label {
+                                anchors.verticalCenter: parent.verticalCenter
+                                leftPadding: 6
+                                visible: recentRow.stars < 0
+                                text: "not rated"
+                                font.pixelSize: 12; font.italic: true
+                                opacity: 0.7
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1082,6 +1231,30 @@ ApplicationWindow {
             onTriggered: volumeDialog.open()
         }
         MenuItem {
+            id: lockItem
+            // Android 14 and later make the user allow it, once
+            property bool blocked: false
+            text: blocked ? "Lock screen player: tap to allow"
+                          : "Lock screen player"
+            font.pixelSize: 18; height: 52
+            checkable: true
+            checked: player.lockPlayerOn()
+            onTriggered: {
+                if (blocked) { checked = true; player.lockPlayerSettings() }
+                else player.setLockPlayerOn(checked)
+            }
+            // looked at each time the menu opens, as the settings page may
+            // have been used since
+            Connections {
+                target: mainMenu
+                function onAboutToShow() {
+                    lockItem.blocked =
+                        player.lockPlayerOn() && !player.lockPlayerAllowed()
+                    lockItem.checked = player.lockPlayerOn()
+                }
+            }
+        }
+        MenuItem {
             text: "Equalizer..."; font.pixelSize: 18; height: 52
             onTriggered: equalizer.open()
         }
@@ -1130,6 +1303,56 @@ ApplicationWindow {
                     to: 1
                     value: player.volume
                     onMoved: player.volume = value
+                }
+            }
+            // The volume of the phone itself for a Bluetooth output, kept
+            // for that device and set once when it connects.
+            ColumnLayout {
+                id: bluetoothBox
+                property var info: ({})
+                visible: info.address !== undefined
+                Layout.fillWidth: true
+                spacing: 4
+                function refresh() { info = player.bluetooth() }
+                Connections {
+                    target: volumeDialog
+                    function onAboutToShow() { bluetoothBox.refresh() }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    text: bluetoothBox.info.name + "  (" +
+                          bluetoothBox.info.address + ")"
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    opacity: 0.7
+                    text: bluetoothBox.info.saved >= 0
+                          ? "Kept: " + bluetoothBox.info.saved + " of " +
+                            bluetoothBox.info.maximum + ".  Now: " +
+                            bluetoothBox.info.current
+                          : "Phone volume now " + bluetoothBox.info.current +
+                            " of " + bluetoothBox.info.maximum +
+                            ".  Nothing kept."
+                }
+                RowLayout {
+                    Button {
+                        text: "Keep this volume"
+                        onClicked: {
+                            player.keepBluetoothVolume()
+                            bluetoothBox.refresh()
+                        }
+                    }
+                    Button {
+                        text: "Forget"
+                        enabled: bluetoothBox.info.saved >= 0
+                        onClicked: {
+                            player.forgetBluetoothVolume(
+                                bluetoothBox.info.address)
+                            bluetoothBox.refresh()
+                        }
+                    }
                 }
             }
         }

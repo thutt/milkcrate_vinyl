@@ -36,7 +36,16 @@ from rating_delegate import (
 )
 from tagdb import SEPARATOR, stat_text
 
-HEADERS = ["Title", "Artist", "Album", "Rating", "Was", "Plays", "Last played"]
+HEADERS = [
+    "Title",
+    "Artist",
+    "Album",
+    "Rating",
+    "Was",
+    "Plays",
+    "Last played",
+    "Listened",
+]
 RATING_COLUMN = 3
 PATH_ROLE = Qt.ItemDataRole.UserRole + 1
 
@@ -49,6 +58,17 @@ def _was(rating, plays) -> str:
     # what the desktop had before the phone's values replaced it
     stars = "not rated" if rating is None else f"{rating} ★"
     return f"{stars}, {plays or 0} plays"
+
+
+def _listened(db, path: str) -> str:
+    # the time heard in the latest play on the phone; blank = not known
+    row = db.con.execute(
+        "SELECT listened_ms FROM media_file WHERE path = ?", (path,)
+    ).fetchone()
+    if not row or row[0] is None:
+        return ""
+    seconds = round(row[0] / 1000)
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 class ReviewDelegate(RatingDelegate):
@@ -203,6 +223,7 @@ class PhoneReview(QDialog):
             _was(was_rating, was_plays),
             stat_text(stats, "@plays"),
             stat_text(stats, "@last"),
+            _listened(self.db, path),
         ]
         for c, text in enumerate(cells):
             item = QTableWidgetItem(text)

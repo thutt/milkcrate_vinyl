@@ -327,6 +327,16 @@ void EntryModel::setStats(const QHash<qint64, SongStat> &stats) {
 
 void EntryModel::setDynamic(bool dynamic) { m_dynamic = dynamic; }
 
+QString EntryModel::detailOf(qint64 id) const {
+    for (const QueueItem &t : m_items) {
+        if (t.id != id) continue;
+        if (m_dynamic || !t.detail.isEmpty()) return t.detail;
+        auto it = m_stats.constFind(id);
+        return it == m_stats.constEnd() ? QString() : songStatText(*it);
+    }
+    return {};
+}
+
 QHash<int, QByteArray> EntryModel::roleNames() const {
     return {{IdRole, "trackId"},
             {TitleRole, "title"},

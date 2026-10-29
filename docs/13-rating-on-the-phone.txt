@@ -5,7 +5,8 @@ LICENSE.
 RATING ON THE PHONE
 ===================
 
-The phone rates the song that is playing.  Ratings are explained in
+The phone rates the song that is playing, and the songs that were played
+lately (see the end).  Ratings are explained in
 07-song-rating.txt: unrated and 0 stars are different values.
 
 Where the rating is shown
@@ -67,8 +68,27 @@ If the phone's database is from an older version, rating fails with
 "The database is from an older version: sync with the desktop to rate
 tracks."  Sync once and rate again.
 
-Rating on the phone cannot be done for a song that is not playing.
-Rate other songs on the desktop.
+Rating what was played: the Recent tab
+--------------------------------------
+
+Songs often cannot be rated while driving.  The third tab, "Recent", lists
+the songs that were played lately, the latest first, to be looked over and
+rated afterwards:
+
+  * "24 hours", "3 days" and "Week" choose how far back to look.
+  * "Not rated" (on at first) leaves out the songs that already have a
+    rating, so the list is what still needs one.
+  * A row shows the title, the artist and album, when the song was played
+    ("Today  2:15 PM", "Yesterday ...", or the day of the week) and five
+    stars.  Tap star N to give N stars; tapping the star that is already the
+    rating sets 0 stars.  A rating is written at once, as for the playing
+    song, and the row shows it at once.  A row stays in the list until the
+    list is made again (a filter is changed, or the tab is opened again).
+  * The copies of a song (the same artist and title) are one row.  The
+    plays are those of the whole song (see above), so a copy that the phone
+    did not play can show up; the rating goes to the copy that the row shows.
+  * At most 300 songs are shown.
+
 
 Using ratings
 -------------

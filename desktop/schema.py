@@ -148,7 +148,9 @@ CREATE TABLE media_file (
     peak         REAL,
     -- UTC, ISO 8601 with milliseconds: when play_count, last_played or
     -- rating was last written (the phone sync keeps the newer)
-    stats_modified TEXT
+    stats_modified TEXT,
+    -- ms of the song heard in its latest play on the phone; NULL = unknown
+    listened_ms  INTEGER
 );
 CREATE TRIGGER rating_whole_insert BEFORE INSERT ON media_file
 WHEN NEW.rating IS NOT NULL AND typeof(NEW.rating) <> 'integer'

@@ -30,6 +30,78 @@ The defaults apply only until a slider has been moved.  The app then
 keeps the value, also across updates.  A target of -8 turns leveling
 almost off: most songs are quieter than that.
 
+Bluetooth volume
+----------------
+
+Under "..." > Volume, while the sound goes to a Bluetooth device, the
+dialog shows the device's name and address, the phone's music volume now
+and the one kept for the device.  "Keep this volume" stores the phone's
+present music volume for that address; "Forget" removes it.  A kept volume
+is set once, when the device connects (and the playback service is
+running); the volume is not changed after that, so the volume buttons and a
+car's own controls still work.  The values are kept in the app's own
+settings on the phone, not in tags.db, which each sync replaces.
+
+Lock screen player
+------------------
+
+While music plays and the phone is locked, turning the screen on (the power
+button) shows a full-screen player over the lock screen instead of the plain
+lock screen: the program's icon and name (upper left), the clock, the cover,
+the title, artist and album, a seek bar with the time played and left, the
+buttons Previous, Play/Pause and Next, six vertical bars, and the rating: a
+star holding the number of stars (a dash when the song is not rated) with a
+down arrow and an up arrow on either side, which take one star off or add one.
+
+The bars are made of lit segments, in a filtered blue, like an 80s display.
+Five are the bands of the equalizer (60 Hz to 14 kHz): the dim segments are
+the range of the setting (-12 to +12 dB), the muted orange line across them is
+the setting now in use (also a preset chosen by Automatic), and the lit
+segments from the bottom are how loud the song is in that band, as with the
+three bars of the song list. The sixth bar, on the right, is the whole sound,
+all the bands together. The top segment of a bar is pushed up at once by a
+loud moment and is pale while it is the end of the bar; once it starts to sink
+it turns LED red and sinks slowly (about five seconds from the top), while the
+lit segments below it fall faster. Above them is the name of the setting, as
+on the main screen ("EQ: Rock", "EQ: Jazz (auto)" or "EQ off"). With the
+equalizer off the lines stay at 0 dB and the bars at the bottom; the sound is
+not measured then.
+
+The name of the setting has an arrow on either side: tap the left one for the
+previous preset and the right one for the next (the built-in ones, then the
+saved ones, round the list), as the arrows of the equalizer dialog do.  A
+finger dragged in a column of the five bands sets that band, -12 to +12 dB in
+steps of 1 (the orange line follows).  While Automatic has chosen a preset the
+arrows and the sliders are locked, as in the dialog. Under the bars are two
+switches: "Auto EQ: On/Off" turns Automatic on or off, and "EQ: On/Off" plays
+the song flat ("EQ: Off", the setting is not changed) so that you can hear
+what the equalizer does, and with it again ("EQ: On"); the next song starts
+with the equalizer again. All of these need the equalizer to be on; with it
+off they are greyed out ("EQ off"), because switching the equalizer on takes
+effect with the next song.
+
+The line under the album is the song's line from the lists: why a dynamic
+playlist chose it, or its plays and last play.  The view turns upside down
+when the phone is held that way (portrait only; it follows the phone's
+motion sensor, whatever the setting of the automatic rotation).
+
+Swiping anywhere but on the seek bar closes the view and shows the lock screen
+again; it also goes away when the phone is unlocked or the screen turns off.
+
+  * The cover is an image in the song's folder (cover, folder, front or
+    album first, then any jpg or png), or else the picture inside the file.
+    With none, the view shows no picture.  The log says which one was used
+    ("cover of <song>: the file <image>" or "inside the song's file").  The
+    cover is also given to Android for the mini player and for a car's
+    display.
+  * "..." > "Lock screen player" switches it on or off (on at first).
+  * It is started by a full-screen notification.  Android 14 and later
+    make you allow that for the app.  While it is not allowed the menu item
+    reads "Lock screen player: tap to allow"; tapping it opens the page
+    "Full-screen notifications" of the app's settings, where it is allowed.
+    Without the permission a plain notification shows instead, and the
+    full-screen player does not open by itself.
+
 Equalizer
 ---------
 
@@ -39,7 +111,7 @@ Equalizer... opens it too.  It is off by default; off, the sound is not
 processed at all.
 
 A line above the seek bar always says what the equalizer is doing:
-"Equalizer off", "Equalizer: Rock" or "Equalizer: Classical (auto)".
+"EQ off", "EQ: Rock" or "EQ: Classical (auto)".
 It is text only; the EQ button changes the settings.
 
   Equalizer on      Switches it on or off.  Switched on, it takes
@@ -104,7 +176,8 @@ one, and a song that is quiet for a while shows low bars.  The top of a
 tall bar, above 15 pixels, is the same blue at full saturation, a clearly
 more intense shade; the rest of the bar is a slightly deeper shade of the
 accent colour so that the two can be told apart.
-Paused, the bars sink slowly to their lowest height.
+Paused, the bars sink slowly to their lowest height.  The scale is
+logarithmic: each part is measured in decibels over a range of 36 dB.
 
 The sound is measured while it goes through the equalizer path, that is,
 with the equalizer on.  With the equalizer off nothing is measured, and the
@@ -164,8 +237,8 @@ for that song.  Moving the sliders is not possible while a song has a
 preset, so to adjust the sound, switch Automatic off, or play a song
 that has no preset.
 
-The line above the seek bar tells the two apart: "Equalizer: Rock" is
-the manual setting and "Equalizer: Rock (auto)" is a preset chosen for
+The line above the seek bar tells the two apart: "EQ: Rock" is
+the manual setting and "EQ: Rock (auto)" is a preset chosen for
 the song.  Both only apply while the equalizer is on.
 
 Automatic equalizer

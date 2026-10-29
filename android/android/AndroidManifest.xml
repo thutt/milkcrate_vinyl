@@ -19,6 +19,9 @@
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- The full-screen player shown over the lock screen when the screen is
+         turned on while music plays -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <!-- The library (music and tags.db) lives in an ordinary folder on the
          SD card, not in the app's own folder (which Android deletes when
          the app is uninstalled) -->
@@ -55,6 +58,17 @@
             <meta-data android:name="android.app.arguments"
                 android:value="-- %%INSERT_APP_ARGUMENTS%% --"/>
         </activity>
+        <activity android:name="org.musicplayer.player.LockPlayerActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|screenLayout|
+                smallestScreenSize"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"/>
         <service android:name="org.musicplayer.player.PlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback"/>

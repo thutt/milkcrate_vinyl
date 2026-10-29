@@ -126,3 +126,104 @@ private:
     float m_level[Bands] = {0, 0, 0};
     bool m_fresh = false;
 };
+
+// The same measure for the five bands of the equalizer (60 Hz, 230 Hz, 910 Hz,
+// 3.6 kHz and 14 kHz), for the five bars of the lock screen player.  Each band
+// is a second-order band-pass about two octaves wide; the levels are weighted
+// to make up for the music's tilt toward the bass and compared with the
+// loudest band lately, as in BandMeter.  A sixth level is the whole sound, all
+// the bands together, compared with its own recent peak.
+class SpectrumMeter {
+public:
+    static constexpr int Bands = 5;
+    static constexpr double Centre[Bands] = {60, 230, 910, 3600, 14000};
+    static constexpr double Weight[Bands] = {1.0, 1.8, 3.5, 7.0, 14.0};
+    static constexpr int Levels = Bands + 1;  // the bands and the whole
+    static constexpr double RangeDb = 36;
+    static constexpr double StartPeak = 0.1;
+    static constexpr double PeakKeep = 0.998;
+
+    void setRate(int rate) {
+        if (rate == m_rate) return;
+        m_rate = rate;
+        m_window = std::max(1, rate / 30);
+        for (int b = 0; b < Bands; ++b) m_filter[b].design(Centre[b], rate);
+        reset();
+    }
+
+    void reset() {
+        for (int b = 0; b < Bands; ++b) {
+            m_filter[b].clear();
+            m_sum[b] = 0;
+            m_level[b] = 0;
+        }
+        m_level[Bands] = 0;
+        m_wholeSum = 0;
+        m_wholePeak = StartPeak;
+        m_peak = StartPeak;
+        m_count = 0;
+        m_fresh = false;
+    }
+
+    void add(float x) {
+        m_wholeSum += double(x) * x;
+        for (int b = 0; b < Bands; ++b) {
+            double y = m_filter[b].process(x);
+            m_sum[b] += y * y;
+        }
+        if (++m_count < m_window) return;
+        double weighted[Bands], loudest = 1e-5;
+        for (int b = 0; b < Bands; ++b) {
+            weighted[b] = std::sqrt(m_sum[b] / m_count) * Weight[b];
+            loudest = std::max(loudest, weighted[b]);
+            m_sum[b] = 0;
+        }
+        m_peak = std::max(m_peak * PeakKeep, loudest);
+        for (int b = 0; b < Bands; ++b) {
+            double db = 20 * std::log10(std::max(weighted[b], 1e-9) / m_peak);
+            m_level[b] = float(std::clamp(1 + db / RangeDb, 0.0, 1.0));
+        }
+        double whole = std::sqrt(m_wholeSum / m_count);
+        m_wholePeak = std::max(m_wholePeak * PeakKeep, whole);
+        m_wholeSum = 0;
+        double db = 20 * std::log10(std::max(whole, 1e-9) / m_wholePeak);
+        m_level[Bands] = float(std::clamp(1 + db / RangeDb, 0.0, 1.0));
+        m_count = 0;
+        m_fresh = true;
+    }
+
+    bool takeFresh() {
+        bool was = m_fresh;
+        m_fresh = false;
+        return was;
+    }
+    float level(int band) const { return m_level[band]; }  // 0..Levels-1
+
+private:
+    struct Band {
+        double b0 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+        void clear() { z1 = z2 = 0; }
+        void design(double frequency, int rate) {
+            const double pi = 3.14159265358979323846;
+            double w0 = 2 * pi * std::min(frequency, 0.45 * rate) / rate;
+            double alpha = std::sin(w0) / (2 * 0.8);  // Q 0.8
+            double c = std::cos(w0), a0 = 1 + alpha;
+            b0 = alpha / a0;  // the band-pass of unity gain at the centre
+            b2 = -alpha / a0;
+            a1 = -2 * c / a0;
+            a2 = (1 - alpha) / a0;
+        }
+        double process(double x) {
+            double y = b0 * x + z1;
+            z1 = -a1 * y + z2;
+            z2 = b2 * x - a2 * y;
+            return y;
+        }
+    };
+    int m_rate = 0, m_window = 1, m_count = 0;
+    Band m_filter[Bands];
+    double m_sum[Bands] = {0, 0, 0, 0, 0}, m_peak = StartPeak;
+    double m_wholeSum = 0, m_wholePeak = StartPeak;
+    float m_level[Levels] = {0, 0, 0, 0, 0, 0};
+    bool m_fresh = false;
+};

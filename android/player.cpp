@@ -48,6 +48,65 @@ static void nativeCommand(JNIEnv *, jclass, jint what, jlong argument) {
             [what, argument] { g_engine->handleCommand(what, argument); },
             Qt::QueuedConnection);
 }
+
+// LockPlayerActivity.log(line): a line from the Java side for the log file.
+static void nativeLog(JNIEnv *env, jclass, jstring line) {
+    const char *text = env->GetStringUTFChars(line, nullptr);
+    qInfo("%s", text);
+    env->ReleaseStringUTFChars(line, text);
+}
+
+// LockPlayerActivity.adjust(what, index, value): the lock screen player
+// changes the equalizer: 0 Automatic on or off, 1 the gain (dB) of a band, 2
+// the next or previous preset (index 1 or -1).  The engine's thread carries it
+// out, as it does a button of the notification (the main thread may be
+// stopped while the phone is locked).
+static void nativeAdjust(JNIEnv *, jclass, jint what, jint index,
+                         jfloat value) {
+    qInfo("lock view: adjust %d %d %g", int(what), int(index), double(value));
+    if (g_engine)
+        QMetaObject::invokeMethod(
+            g_engine,
+            [what, index, value] {
+                g_engine->lockAdjust(what, index, double(value));
+            },
+            Qt::QueuedConnection);
+}
+
+// LockPlayerActivity.spectrum(): 15 numbers: whether the levels are being
+// measured (1 or 0), the gain in dB of each of the five bands of the
+// equalizer, the level (0 to 1) of the sound in each band and in all, and
+// whether the equalizer is bypassed (1 or 0), and whether Automatic is on and
+// whether it has chosen a preset (1 or 0 each).
+static jfloatArray nativeSpectrum(JNIEnv *env, jclass) {
+    jfloat values[15] = {0};
+    if (g_engine) {
+        qint64 at = g_engine->levelAt;
+        qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+        values[0] = at != 0 && now - at < 400 ? 1.f : 0.f;
+        for (int b = 0; b < SpectrumMeter::Bands; ++b)
+            values[1 + b] = g_engine->shownGain[b];
+        for (int b = 0; b < SpectrumMeter::Levels; ++b)
+            values[6 + b] = g_engine->spectrum[b];
+        values[12] = g_engine->bypassed ? 1.f : 0.f;
+        values[13] = g_engine->autoOn ? 1.f : 0.f;
+        values[14] = g_engine->autoLocked ? 1.f : 0.f;
+    }
+    static qint64 lastLogged = 0;
+    qint64 stamp = QDateTime::currentMSecsSinceEpoch();
+    if (stamp - lastLogged > 2000) {  // what the lock screen view is given
+        lastLogged = stamp;
+        qInfo("lock view: live %g, gains %g %g %g %g %g, levels %g %g %g %g "
+              "%g, all %g", values[0], values[1], values[2], values[3],
+              values[4], values[5], values[6], values[7], values[8], values[9],
+              values[10], values[11]);
+    }
+    jfloatArray out = env->NewFloatArray(15);
+    env->SetFloatArrayRegion(out, 0, 15, values);
+    return out;
+}
 #endif
 
 Player::Player(QObject *parent)
@@ -86,6 +145,7 @@ Player::Player(QObject *parent)
                 emit ratingChanged();
                 emit currentChanged();
                 showBpm(id);
+                pushLockDetail();
             });
     connect(m_engine, &Engine::ratingKnown, this,
             [this](qint64 id, int rating) {
@@ -108,6 +168,17 @@ Player::Player(QObject *parent)
             [this] { refreshInfo(true); });
     m_thread.start();
     m_sync->moveToThread(&m_syncThread);
+    // the lock screen player changed the equalizer: keep and show it here too
+    connect(m_engine, &Engine::eqAdjusted, this,
+            [this](bool automatic, const QVector<double> &gains) {
+                m_eqAuto = automatic;
+                m_eqGains = gains;
+                m_settings.setValue("eqAuto", automatic);
+                QStringList saved;
+                for (double g : m_eqGains) saved << QString::number(g);
+                m_settings.setValue("eqGains", saved);
+                emit eqChanged();
+            });
     connect(m_engine, &Engine::eqChosen, this, [this](const QString &name) {
         if (name == m_eqAutoName) return;
         m_eqAutoName = name;
@@ -143,6 +214,13 @@ Player::Player(QObject *parent)
     env.registerNativeMethods(
         "org/musicplayer/player/PlaybackService",
         {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)}});
+    if (!env.registerNativeMethods(
+            "org/musicplayer/player/LockPlayerActivity",
+            {{"spectrum", "()[F", reinterpret_cast<void *>(nativeSpectrum)},
+         {"adjust", "(IIF)V", reinterpret_cast<void *>(nativeAdjust)},
+         {"log", "(Ljava/lang/String;)V",
+          reinterpret_cast<void *>(nativeLog)}}))
+        qWarning("the lock screen player's spectrum was not registered");
 #endif
     connect(&m_poll, &QTimer::timeout, this, [this] {
         qint64 p = m_engine->position, d = m_engine->duration;
@@ -206,6 +284,73 @@ void Player::rate(int stars) {
 void Player::clearRating() {
     if (m_currentId < 0) return;
     onEngine([e = m_engine, id = m_currentId] { e->setRating(id, -1); });
+}
+
+QVariantList Player::recentSongs(int days, bool onlyUnrated) const {
+    const QHash<qint64, SongStat> stats = m_model.stats();
+    const QDateTime cutoff = QDateTime::currentDateTimeUtc().addDays(-days);
+    struct Row {
+        QDateTime when;
+        const Track *track;
+        qint64 plays;
+    };
+    QVector<Row> rows;
+    for (auto it = stats.constBegin(); it != stats.constEnd(); ++it) {
+        QDateTime when =
+            QDateTime::fromString(it->last, "yyyy-MM-ddTHH:mm:ssZ");
+        if (!when.isValid()) continue;
+        when.setTimeSpec(Qt::UTC);
+        const Track *t = m_model.byId(it.key());
+        if (when < cutoff || !t) continue;
+        rows.append({when, t, it->plays});
+    }
+    // the latest first; the copies of a song are one song (the stats of the
+    // copies are the same), and a copy that was rated stands for it
+    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) {
+        return a.when != b.when ? a.when > b.when : a.track->id < b.track->id;
+    });
+    QHash<QString, int> seen;
+    QVector<Row> songs;
+    for (const Row &r : rows) {
+        const QString key =
+            (r.track->artist + '\x01' + r.track->title).toLower();
+        auto at = seen.constFind(key);
+        if (at == seen.constEnd()) {
+            seen.insert(key, int(songs.size()));
+            songs.append(r);
+        } else if (songs[*at].track->rating < 0 && r.track->rating >= 0) {
+            songs[*at].track = r.track;
+        }
+    }
+    QVariantList out;
+    const QDate today = QDate::currentDate();
+    for (const Row &r : songs) {
+        if (onlyUnrated && r.track->rating >= 0) continue;
+        if (out.size() >= 300) break;
+        const QDateTime local = r.when.toLocalTime();
+        const qint64 ago = local.date().daysTo(today);
+        const QString day = ago == 0   ? QString("Today")
+                            : ago == 1 ? QString("Yesterday")
+                                       : local.toString("dddd");
+        out.append(QVariantMap{
+            {"id", r.track->id},
+            {"title", r.track->title},
+            {"artist", r.track->artist},
+            {"album", r.track->album},
+            {"rating", r.track->rating},
+            {"played", day + "  " + local.toString("h:mm AP")},
+            {"plays", r.plays}});
+    }
+    return out;
+}
+
+int Player::rateSong(qint64 id, int stars) {
+    const Track *t = m_model.byId(id);
+    qInfo("rate song %lld: %s", id, t ? "found" : "not in the library");
+    if (!t) return -1;
+    const int value = stars == t->rating && stars > 0 ? 0 : stars;
+    onEngine([e = m_engine, id, value] { e->setRating(id, value); });
+    return value;
 }
 
 void Player::startSync() {
@@ -294,6 +439,103 @@ QString Player::findLibrary() const {
     for (const QString &c : candidates)
         if (QFileInfo::exists(c + "/tags.db")) return c;
     return sd;  // a card is there but the library (or the permission) is not
+}
+
+#ifdef Q_OS_ANDROID
+static const char *BluetoothClass = "org/musicplayer/player/BluetoothVolume";
+#endif
+
+QVariantMap Player::bluetooth() const {
+    QVariantMap out;
+#ifdef Q_OS_ANDROID
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QString device = QJniObject::callStaticObjectMethod(
+                         BluetoothClass, "device",
+                         "(Landroid/content/Context;)Ljava/lang/String;",
+                         context.object())
+                         .toString();
+    int tab = device.indexOf('\t');
+    if (tab < 0) return out;
+    QString address = device.left(tab);
+    out["address"] = address;
+    out["name"] = device.mid(tab + 1);
+    out["saved"] = QJniObject::callStaticMethod<jint>(
+        BluetoothClass, "saved",
+        "(Landroid/content/Context;Ljava/lang/String;)I", context.object(),
+        QJniObject::fromString(address).object<jstring>());
+    out["current"] = QJniObject::callStaticMethod<jint>(
+        BluetoothClass, "current", "(Landroid/content/Context;)I",
+        context.object());
+    out["maximum"] = QJniObject::callStaticMethod<jint>(
+        BluetoothClass, "maximum", "(Landroid/content/Context;)I",
+        context.object());
+#endif
+    return out;
+}
+
+void Player::keepBluetoothVolume() {
+#ifdef Q_OS_ANDROID
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    int step = QJniObject::callStaticMethod<jint>(
+        BluetoothClass, "save", "(Landroid/content/Context;)I",
+        context.object());
+    qInfo("kept the Bluetooth volume step %d", step);
+#endif
+}
+
+bool Player::lockPlayerOn() const {
+#ifdef Q_OS_ANDROID
+    return QJniObject::callStaticMethod<jboolean>(
+        "org/musicplayer/player/LockPlayerActivity", "isEnabled",
+        "(Landroid/content/Context;)Z",
+        QNativeInterface::QAndroidApplication::context().object());
+#else
+    return false;
+#endif
+}
+
+bool Player::lockPlayerAllowed() const {
+#ifdef Q_OS_ANDROID
+    return QJniObject::callStaticMethod<jboolean>(
+        "org/musicplayer/player/LockPlayerActivity", "isAllowed",
+        "(Landroid/content/Context;)Z",
+        QNativeInterface::QAndroidApplication::context().object());
+#else
+    return true;
+#endif
+}
+
+void Player::lockPlayerSettings() {
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/LockPlayerActivity", "openSettings",
+        "(Landroid/content/Context;)V",
+        QNativeInterface::QAndroidApplication::context().object());
+#endif
+}
+
+void Player::setLockPlayerOn(bool on) {
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/LockPlayerActivity", "setEnabled",
+        "(Landroid/content/Context;Z)V",
+        QNativeInterface::QAndroidApplication::context().object(),
+        jboolean(on));
+#else
+    Q_UNUSED(on)
+#endif
+}
+
+void Player::forgetBluetoothVolume(const QString &address) {
+#ifdef Q_OS_ANDROID
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject::callStaticMethod<void>(
+        BluetoothClass, "forget",
+        "(Landroid/content/Context;Ljava/lang/String;)V", context.object(),
+        QJniObject::fromString(address).object<jstring>());
+#else
+    Q_UNUSED(address)
+#endif
 }
 
 void Player::checkFilesAccess() {
@@ -594,9 +836,26 @@ QString Player::eqShownPreset() const {
     return m_eqAuto && !m_eqAutoName.isEmpty() ? m_eqAutoName : eqPreset();
 }
 
+// The line that the song's row shows, for the lock screen player: why a dynamic
+// playlist chose it, or its plays and last play.
+void Player::pushLockDetail() {
+#ifdef Q_OS_ANDROID
+    QString line = m_entries.detailOf(m_currentId);
+    if (line.isEmpty()) {
+        const auto stats = m_model.stats();
+        auto it = stats.constFind(m_currentId);
+        if (it != stats.constEnd()) line = songStatText(*it);
+    }
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/LockPlayerActivity", "setDetail",
+        "(Ljava/lang/String;)V",
+        QJniObject::fromString(line).object<jstring>());
+#endif
+}
+
 QString Player::eqSummary() const {
-    if (!m_eqOn) return "Equalizer off";
-    return "Equalizer: " + eqShownPreset() +
+    if (!m_eqOn) return "EQ off";
+    return "EQ: " + eqShownPreset() +
            (m_eqAuto && !m_eqAutoName.isEmpty() ? " (auto)" : "");
 }
 
@@ -887,9 +1146,11 @@ void Player::refreshInfo(bool lists) {
                 }
                 m_playlists.setMatched(info.matched);
                 m_model.setStats(info.stats);
+                emit statsChanged();
                 m_entries.setStats(info.stats);
                 if (open >= 0 && open == m_openId) {
                     if (!info.why.isEmpty()) m_entries.setDetails(info.why);
+                    pushLockDetail();
                     const int n = info.matched.value(open, -1);
                     if (n >= 0 && n != m_openMatched) {
                         m_openMatched = n;

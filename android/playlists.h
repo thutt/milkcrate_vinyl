@@ -111,6 +111,7 @@ public:
     // not dynamic (a dynamic one has the reason it was chosen there).
     void setStats(const QHash<qint64, SongStat> &stats);
     void setDynamic(bool dynamic);  // the playlist that is open
+    QString detailOf(qint64 id) const;  // the line of the song's row
     const QVector<QueueItem> &items() const { return m_items; }
 
 private:

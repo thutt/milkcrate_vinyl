@@ -179,8 +179,12 @@ Reviewing what the phone changed
 Songs often cannot be rated while driving.  When a sync from the player
 or editor takes plays or ratings from the phone, a "Changes from the
 phone" window opens after the sync dialog closes.  It lists those songs
-with their rating, what the desktop had before ("Was"), the play count
-and the last played time.  Click a star to rate a song (a song
+with their rating, what the desktop had before ("Was"), the play count,
+the last played time and how long the song was heard in its latest play
+("Listened", minutes:seconds; blank when the phone did not record it).  The
+phone writes the time when the song ends or is left, and only for a song that
+counted as played (20 seconds); the desktop database gets the column when it
+is opened.  Click a star to rate a song (a song
 not yet rated shows five faint stars; a click anywhere else in the cell
 changes nothing), or select songs and press 0 to 5 (Delete: not rated);
 right-click > Rate does the same.  "Only songs that are not rated" shows

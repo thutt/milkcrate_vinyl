@@ -87,9 +87,12 @@ def merge(db, phone_path: str) -> Report:
             # an older database: the phone cannot have written anything
             return report
 
-        for path, plays, last, rating, modified in phone.execute(
-            "SELECT path, play_count, last_played, rating, stats_modified FROM"
-            " media_file WHERE stats_modified IS NOT NULL"
+        heard = (
+            "listened_ms" if "listened_ms" in have else "NULL"
+        )  # an older phone database has no column for it
+        for path, plays, last, rating, modified, listened in phone.execute(
+            "SELECT path, play_count, last_played, rating, stats_modified,"
+            f" {heard} FROM media_file WHERE stats_modified IS NOT NULL"
         ):
             if path not in db.ids:
                 continue
@@ -107,8 +110,9 @@ def merge(db, phone_path: str) -> Report:
             with db.con:
                 db.con.execute(
                     "UPDATE media_file SET play_count = ?, last_played = ?,"
-                    " rating = ?, stats_modified = ? WHERE id = ?",
-                    (plays, last, rating, modified, fid),
+                    " rating = ?, stats_modified = ?, listened_ms = ? WHERE"
+                    " id = ?",
+                    (plays, last, rating, modified, listened, fid),
                 )
             db.stats[path] = (rating, plays or 0, last)
             report.stats_from_phone += 1

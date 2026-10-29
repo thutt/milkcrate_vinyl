@@ -130,6 +130,15 @@ copies on other albums and in other formats, marked as duplicates or
 not).  So a song played from one copy is not selected through another
 copy that was never played.  The Rating rule still looks at the file.
 
+A song is on a list once.  When a list is filled, regenerated or topped up
+(on the desktop and on the phone), a file with the same artist and title as
+a file already on the list, or as one chosen in the same pass, is skipped:
+the studio and the live recording of a song, or the copy on a compilation,
+are not played one after the other.  The first in the order of the choice
+stands for the song (with Prefer, the preferred format).  A list that
+already holds two of them keeps them until one is played.  "N matched"
+counts files, as before.
+
 A song that no longer fits the rules leaves the list.  When the editor
 or the player starts, and after every sync, each dynamic playlist drops
 the songs its rules no longer select (a song played from another copy,

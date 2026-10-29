@@ -6,6 +6,7 @@
 // see the file LICENSE for the license text.
 package org.musicplayer.player;
 
+import android.app.KeyguardManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -16,6 +17,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
 import android.media.AudioDeviceCallback;
@@ -30,6 +32,8 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Keeps the music playing in the background: a foreground service with a media
@@ -39,10 +43,13 @@ import android.util.Log;
  */
 public class PlaybackService extends Service {
     public static final int PLAY = 0, PAUSE = 1, NEXT = 2, PREVIOUS = 3,
-                            STOP = 4, SEEK = 5, STAR_DOWN = 6, STAR_UP = 7;
+                            STOP = 4, SEEK = 5, STAR_DOWN = 6, STAR_UP = 7,
+                            BYPASS = 8;
     private static final String CUSTOM_STAR_DOWN = "star_down", CUSTOM_STAR_UP =
                                                                     "star_up";
     private static final String CHANNEL = "playback";
+    private static final String LOCK_CHANNEL = "lockscreen";
+    private static final int LOCK_NOTIFICATION_ID = 2;
     private static final int NOTIFICATION_ID = 1;
     private static final String ACTION_UPDATE = "org.musicplayer.player.UPDATE";
     private static final String ACTION_COMMAND =
@@ -59,6 +66,15 @@ public class PlaybackService extends Service {
     private MediaSession session;
     private boolean foreground = false;
     private AudioManager audioManager;
+    private boolean playingNow = false;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService covers = Executors.newSingleThreadExecutor();
+    private final BroadcastReceiver screenOn = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            showOnLockScreen();
+        }
+    };
     private AudioFocusRequest focus;
     private boolean hasFocus = false, pausedByFocus = false;
 
@@ -73,6 +89,12 @@ public class PlaybackService extends Service {
     // A Bluetooth, wired, USB or car output went away.  The built-in outputs
     // are ignored: they come and go with calls and the like.
     private final AudioDeviceCallback outputs = new AudioDeviceCallback() {
+        @Override
+        public void onAudioDevicesAdded(AudioDeviceInfo[] added) {
+            for (AudioDeviceInfo device : added)
+                BluetoothVolume.connected(PlaybackService.this, device);
+        }
+
         @Override
         public void onAudioDevicesRemoved(AudioDeviceInfo[] removed) {
             for (AudioDeviceInfo device : removed) {
@@ -121,8 +143,10 @@ public class PlaybackService extends Service {
                 break;
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
                 hasFocus = false;
-                pausedByFocus = true;
-                send(PAUSE, 0);
+                // only music that was playing starts again; one that the
+                // listener had paused stays paused when the alarm is dismissed
+                pausedByFocus = playingNow;
+                if (playingNow) send(PAUSE, 0);
                 break;
             case AudioManager.AUDIOFOCUS_GAIN:
                 hasFocus = true;
@@ -161,15 +185,18 @@ public class PlaybackService extends Service {
 
     /** Called from C++ whenever the track or the play state changes. */
     // phase: what the title line shows, for head units that have one line for
-    // it: 0 the song's title, 1 the stars and the time left (swapped every 10 s)
+    // it: 0 the song's title, 1 the stars and the time left, and the
+    // title in place of the album (swapped every 10 s)
     public static void update(Context context, String title, String artist,
-                              String album, boolean playing, long position,
+                              String album, String path, boolean playing,
+                              long position,
                               long duration, int rating, int phase) {
         Intent intent = new Intent(context, PlaybackService.class)
                             .setAction(ACTION_UPDATE)
                             .putExtra("title", title)
                             .putExtra("artist", artist)
                             .putExtra("album", album)
+                            .putExtra("path", path)
                             .putExtra("phase", phase)
                             .putExtra("playing", playing)
                             .putExtra("position", position)
@@ -196,6 +223,16 @@ public class PlaybackService extends Service {
         channel.setShowBadge(false);
         getSystemService(NotificationManager.class)
             .createNotificationChannel(channel);
+        // the full-screen view needs a channel of high importance; it makes no
+        // sound
+        NotificationChannel lock = new NotificationChannel(
+            LOCK_CHANNEL, "Lock screen player",
+            NotificationManager.IMPORTANCE_HIGH);
+        lock.setSound(null, null);
+        lock.enableVibration(false);
+        lock.setShowBadge(false);
+        getSystemService(NotificationManager.class)
+            .createNotificationChannel(lock);
         R_STAR_DOWN = getResources().getIdentifier("ic_star_down", "drawable",
                                                    getPackageName());
         R_STAR_UP = getResources().getIdentifier("ic_star_up", "drawable",
@@ -240,12 +277,13 @@ public class PlaybackService extends Service {
         session.setActive(true);
         audioManager = getSystemService(AudioManager.class);
         audioManager.registerAudioDeviceCallback(outputs, new Handler());
+        registerReceiver(screenOn, new IntentFilter(Intent.ACTION_SCREEN_ON));
         registerReceiver(
             noisy,
             new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
     }
 
-    private static void send(int what, long argument) {
+    static void send(int what, long argument) {
         try {
             command(what, argument);
         } catch (UnsatisfiedLinkError e) { /* the C++ side is not loaded yet */
@@ -261,6 +299,7 @@ public class PlaybackService extends Service {
             show(intent.getStringExtra("title"),
                  intent.getStringExtra("artist"),
                  intent.getStringExtra("album"),
+                 intent.getStringExtra("path"),
                  intent.getIntExtra("phase", 0),
                  intent.getBooleanExtra("playing", false),
                  intent.getLongExtra("position", 0),
@@ -307,23 +346,93 @@ public class PlaybackService extends Service {
                        : String.format("%d:%02d", minutes, seconds % 60));
     }
 
-    private void show(String title, String artist, String album, int phase,
-                      boolean playing, long position, long duration,
+    // The lock screen view shows what was last reported.  The picture is read
+    // in a thread of its own when the song changes, and shown when it is there.
+    private void remember(String title, String artist, String album,
+                          String path, boolean playing, long position,
+                          long duration, int rating) {
+        LockPlayerActivity.State old = LockPlayerActivity.state;
+        LockPlayerActivity.State now = new LockPlayerActivity.State();
+        now.title = title;
+        now.artist = artist;
+        now.album = album;
+        now.path = path == null ? "" : path;
+        now.playing = playing;
+        now.position = position;
+        now.duration = duration;
+        now.rating = rating;
+        now.cover = now.path.equals(old.path) ? old.cover : null;
+        LockPlayerActivity.state = now;
+        playingNow = playing;
+        if (!now.path.equals(old.path)) {
+            final String wanted = now.path;
+            covers.execute(() -> {
+                Bitmap bitmap = CoverArt.load(wanted, 1024);
+                LockPlayerActivity.log("cover of " + wanted + ": " +
+                                       CoverArt.source);
+                if (!wanted.equals(LockPlayerActivity.state.path)) return;
+                LockPlayerActivity.state.cover = bitmap;
+                handler.post(() -> {
+                    if (wanted.equals(LockPlayerActivity.state.path))
+                        LockPlayerActivity.changed();
+                });
+            });
+        }
+        LockPlayerActivity.changed();
+    }
+
+    // The screen was turned on while music plays and the phone is locked: ask
+    // for the full-screen view.  Android starts it at once when the phone is
+    // locked, and shows a heads-up notification when it is not allowed to.
+    private void showOnLockScreen() {
+        if (!playingNow || !LockPlayerActivity.enabled(this) ||
+            LockPlayerActivity.visible() ||
+            !getSystemService(KeyguardManager.class).isKeyguardLocked())
+            return;
+        PendingIntent open = PendingIntent.getActivity(
+            this, 1, new Intent(this, LockPlayerActivity.class)
+                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE);
+        Notification notification =
+            new Notification.Builder(this, LOCK_CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle(LockPlayerActivity.state.title)
+                .setContentText(LockPlayerActivity.state.artist)
+                .setCategory(Notification.CATEGORY_TRANSPORT)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setFullScreenIntent(open, true)
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .setTimeoutAfter(5000)
+                .build();
+        getSystemService(NotificationManager.class)
+            .notify(LOCK_NOTIFICATION_ID, notification);
+    }
+
+    private void show(String title, String artist, String album, String path,
+                      int phase, boolean playing, long position, long duration,
                       int rating) {
         if (playing) takeFocus();
+        if (playing) pausedByFocus = false;  // started again by the listener
+        remember(title, artist, album, path, playing, position, duration,
+                 rating);
         String time = left(position, duration);
         String info =
             stars(rating) + (time.isEmpty() ? "" : "  \u00b7  " + time);
         String line = artist + "  \u00b7  " + info;  // the notification
         // A head unit may show one line for the title: it alternates between
-        // the song's title and the stars and time left.  Artist and album stay.
+        // the song's title and the stars and time left, and the album line
+        // between the album and the song's title.  The artist stays.
         session.setMetadata(
             new MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE,
                            phase == 1 ? info : title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
-                .putString(MediaMetadata.METADATA_KEY_ALBUM, album)
+                .putString(MediaMetadata.METADATA_KEY_ALBUM,
+                           phase == 1 ? title : album)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
+                .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART,
+                           LockPlayerActivity.state.cover)
                 .build());
         session.setPlaybackState(
             new PlaybackState.Builder()
@@ -397,6 +506,8 @@ public class PlaybackService extends Service {
         audioManager.unregisterAudioDeviceCallback(outputs);
         dropFocus();
         unregisterReceiver(noisy);
+        unregisterReceiver(screenOn);
+        covers.shutdown();
         if (session != null) {
             session.setActive(false);
             session.release();

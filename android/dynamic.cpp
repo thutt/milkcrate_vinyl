@@ -360,8 +360,28 @@ QVector<Track> loadTracks(QSqlDatabase db, const QSet<QString> &ruleFields,
     return tracks;
 }
 
+// What makes two files the same song, as the plays are counted
+// (computeSongStats and the desktop's song_key): the artist and title,
+// spelling aside; empty for a file without both, which is a song of its own.
+static QString songKey(const Track &t) {
+    QString artist, title;
+    for (const QString &v : t.tags.value("ARTIST"))
+        if (!v.trimmed().isEmpty()) artist += (artist.isEmpty() ? "" : " ") + v;
+    for (const QString &v : t.tags.value("TITLE"))
+        if (!v.trimmed().isEmpty()) {
+            title = v;
+            break;
+        }
+    if (artist.isEmpty() || title.isEmpty()) return {};
+    return songName(artist) + '\x01' + songName(title);
+}
+
+// distinct: no two of the chosen are the same song, and none is the song of a
+// track in exclude (the copy on a live album is not chosen next to the one on
+// the studio album); the first in the order of the choice stands for its song.
 QVector<qint64> chooseFrom(QVector<Track> &tracks, const QJsonObject &rules,
-                           const QSet<qint64> &exclude, int limit) {
+                           const QSet<qint64> &exclude, int limit,
+                           bool distinct = false) {
     const QDateTime now = QDateTime::currentDateTimeUtc();
     const bool filtered = !rules["rules"].toArray().isEmpty();
     const Test selects = filtered ? compileGroup(rules, now)
@@ -395,9 +415,21 @@ QVector<qint64> chooseFrom(QVector<Track> &tracks, const QJsonObject &rules,
                              };
                              return rank(a) < rank(b);
                          });
+    QSet<QString> taken;
+    if (distinct)
+        for (const Track &t : tracks)
+            if (exclude.contains(t.id)) taken.insert(songKey(t));
+    taken.remove(QString());
     QVector<qint64> ids;
     for (const Track *t : chosen) {
         if (ids.size() >= limit) break;
+        if (distinct) {
+            const QString key = songKey(*t);
+            if (!key.isEmpty()) {
+                if (taken.contains(key)) continue;
+                taken.insert(key);
+            }
+        }
         ids.append(t->id);
     }
     return ids;
@@ -417,7 +449,7 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
     collectFields(rules, fields);
     fields.insert(rules["sort"].toObject()["field"].toString());
     QVector<Track> tracks = loadTracks(c.db(), fields);
-    return chooseFrom(tracks, rules, exclude, limit);
+    return chooseFrom(tracks, rules, exclude, limit, true);
 }
 
 // How a dynamic playlist's rules see some of the tracks: the values they test,
@@ -687,7 +719,8 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
             for (const Pending &p : pending) collectFields(p.rules, fields);
             QVector<Track> tracks = loadTracks(c.db(), fields);
             for (Pending &p : pending)
-                p.chosen = chooseFrom(tracks, p.rules, p.exclude, p.missing);
+                p.chosen = chooseFrom(tracks, p.rules, p.exclude, p.missing,
+                                      true);
         }
         QMutexLocker lock(&dbLock());
         if (generation != dbGeneration()) continue;  // choose again

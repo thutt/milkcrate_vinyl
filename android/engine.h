@@ -45,6 +45,18 @@ public:
     // are measured from the sound that goes through the equalizer path.
     std::atomic<float> level[BandMeter::Bands] = {{0}, {0}, {0}};
     std::atomic<qint64> levelAt{0};
+    // the equalizer is heard flat although it is on, to compare (the lock
+    // screen player's button); a new song ends it
+    std::atomic<bool> bypassed{false};
+    // Automatic is on, and has chosen a preset for the song (the sliders and
+    // the arrows are then locked), for the lock screen player
+    std::atomic<bool> autoOn{false}, autoLocked{false};
+    // The same for the five bands of the equalizer, and the gain (dB) that
+    // each has now, for the lock screen player.
+    std::atomic<float> spectrum[SpectrumMeter::Levels] = {{0}, {0}, {0},
+                                                          {0}, {0}, {0}};
+    std::atomic<float> shownGain[SpectrumMeter::Bands] = {{0}, {0}, {0}, {0},
+                                                          {0}};
     QString sectionText() const;  // "Warmup (1/3) — 4:12 left — 12:12 in all",
                                   // empty when no schedule plays
 
@@ -76,6 +88,12 @@ public slots:
     void setVolume(double volume, double target, bool leveling);
     // gains: dB per band.  automatic: the song's genres choose a preset (see
     // eqpresets.h) and the gains are used for songs that get none.
+    // The lock screen player changes the equalizer here, in the engine's
+    // thread, because Android stops the main thread while another screen is
+    // in front of the app: 0 Automatic on or off, 1 the gain (dB) of a band,
+    // 2 the next (1) or previous (-1) preset.  The main thread learns of it
+    // through eqAdjusted, when it runs again.
+    void lockAdjust(int what, int index, double value);
     void setEqualizer(bool on, const QVector<double> &gains, bool automatic,
                       const QList<CustomEq> &customs);
 signals:
@@ -85,6 +103,7 @@ signals:
     void message(const QString &text);
     void ratingKnown(qint64 id, int rating);  // -1: not rated
     void eqChosen(const QString &preset);     // automatic equalizer; "": none
+    void eqAdjusted(bool automatic, const QVector<double> &gains);
     void playCounted();  // a play was written to the database (lists may have
                          // changed)
 public:
@@ -147,6 +166,7 @@ private:
     // Writes to tags.db, in the order they were asked for.  They run in a
     // thread of their own and wait for the card; the engine thread must not.
     void writePlay(const QString &path, qint64 id);
+    void writeListened(const QString &path, qint64 id, qint64 heard);
     void writeRating(const QString &path, qint64 id, int rating);
     void writePlayed(const QString &path, const QVector<qint64> &ids);
     QThreadPool m_writes;
@@ -165,6 +185,7 @@ private:
     int m_pos = -1;  // index into m_order
     qint64 m_currentId = -1;
     QString m_title, m_artist, m_album;
+    QString m_file;  // the song's file, for its picture
     int m_phase = 0;  // 0: the service shows the title, 1: stars and time left
     int m_rating = -1;  // of the current track: -1 unrated, 0..5 stars (shown
                         // in the notification)
@@ -231,7 +252,10 @@ private:
     QByteArray m_eqQueue;  // 16-bit stereo waiting for the sink
     int m_sourceRate = 0, m_sinkRate = 0;
     BandMeter m_bands;
+    SpectrumMeter m_spectrum;
     void publishLevels();
+    QString eqName() const;  // "EQ: Rock"; for the lock screen player
+    void pushEqName() const;
     double m_resamplePos = 0;  // position of the next output sample, in input
                                // samples after m_last
     float m_last[2] = {0, 0};
