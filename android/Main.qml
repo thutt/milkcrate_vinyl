@@ -617,9 +617,21 @@ ApplicationWindow {
                     readonly property int stars:
                         recentPage.given[modelData.id] !== undefined
                         ? recentPage.given[modelData.id] : modelData.rating
+                    // play (or stop) the song alone, to hear it before rating
+                    readonly property bool heard:
+                        player.currentId === modelData.id && player.playing
+                    RoundButton {
+                        id: recentPlay
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: recentRow.heard ? "\u25a0" : "\u25b6"
+                        font.pixelSize: 20
+                        onClicked: player.playSong(recentRow.song.id)
+                    }
                     Column {
                         anchors.left: parent.left; anchors.leftMargin: 14
-                        anchors.right: parent.right; anchors.rightMargin: 14
+                        anchors.right: recentPlay.left; anchors.rightMargin: 8
                         anchors.top: parent.top; anchors.topMargin: 8
                         spacing: 2
                         Label {
@@ -639,7 +651,7 @@ ApplicationWindow {
                         Row {
                             spacing: 0
                             Label {
-                                width: 150
+                                width: 120
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: modelData.played
                                 elide: Text.ElideRight

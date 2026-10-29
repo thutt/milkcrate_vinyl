@@ -87,6 +87,13 @@ rated afterwards:
   * The copies of a song (the same artist and title) are one row.  The
     plays are those of the whole song (see above), so a copy that the phone
     did not play can show up; the rating goes to the copy that the row shows.
+  * The button at the right of a row plays that song alone, to hear it
+    before rating it; while it plays, the button is a square, which pauses
+    the song (a second tap on the triangle goes on from there).  Nothing else
+    is queued: when the song ends, the music stops.
+  * A sync with the desktop clears the list.  The desktop then has the plays
+    (it lists them in "Changes from the phone", 11), so the tab shows only
+    what was played after the sync.
   * At most 300 songs are shown.
 
 

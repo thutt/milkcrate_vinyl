@@ -171,8 +171,12 @@ public:
     Q_INVOKABLE void clearRating();    // not rated
     // The songs played in the last days, the latest first, each a map (id,
     // title, artist, album, rating, played, plays), to look over after a
-    // drive; only the ones not rated when onlyUnrated.
+    // drive; only the ones not rated when onlyUnrated.  A sync with the desktop
+    // clears the list: only what was played after it is shown.
     Q_INVOKABLE QVariantList recentSongs(int days, bool onlyUnrated) const;
+    // Plays one song alone (the Recent tab, to rate it); the song that is
+    // already current is paused or resumed instead.
+    Q_INVOKABLE void playSong(qint64 id);
     // Rates any song (a star pressed again takes it off); the rating now.
     Q_INVOKABLE int rateSong(qint64 id, int stars);
     Q_INVOKABLE void

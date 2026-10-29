@@ -200,6 +200,9 @@ Player::Player(QObject *parent)
     connect(m_sync, &SyncServer::finished, this,
             [this] { emit syncFinished(); });
     connect(m_sync, &SyncServer::databaseReplaced, this, [this] {
+        m_settings.setValue(
+            "recentSince",
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
         onEngine([e = m_engine] { e->listChanged(); });
         reload();
     });
@@ -288,7 +291,12 @@ void Player::clearRating() {
 
 QVariantList Player::recentSongs(int days, bool onlyUnrated) const {
     const QHash<qint64, SongStat> stats = m_model.stats();
-    const QDateTime cutoff = QDateTime::currentDateTimeUtc().addDays(-days);
+    QDateTime cutoff = QDateTime::currentDateTimeUtc().addDays(-days);
+    // the desktop has these plays now (it shows them for review): not again
+    const QDateTime synced =
+        QDateTime::fromString(m_settings.value("recentSince").toString(),
+                              Qt::ISODate);
+    if (synced.isValid() && synced > cutoff) cutoff = synced;
     struct Row {
         QDateTime when;
         const Track *track;
@@ -342,6 +350,20 @@ QVariantList Player::recentSongs(int days, bool onlyUnrated) const {
             {"plays", r.plays}});
     }
     return out;
+}
+
+void Player::playSong(qint64 id) {
+    if (id == m_currentId) {
+        toggle();
+        return;
+    }
+    const Track *t = m_model.byId(id);
+    if (!t) return;
+    QueueItem item{t->id,       t->path,     t->title, t->artist, t->album,
+                   t->loudness, t->measured, -1,       t->rating};
+    item.genres = t->genres;
+    setPlayingList(-1);
+    onEngine([e = m_engine, item] { e->playQueue({item}, 0, false); });
 }
 
 int Player::rateSong(qint64 id, int stars) {
