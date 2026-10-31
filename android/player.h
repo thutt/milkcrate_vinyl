@@ -128,7 +128,7 @@ public:
     QStringList eqPresets() const;  // the built-in ones, then the saved ones
     QStringList eqCustomNames() const;
     QString eqPreset() const;  // the preset the gains match, else "Custom"
-    QStringList eqBands() const;  // "60 Hz", ...
+    QStringList eqBands() const;  // "31 Hz", ...
     // what is being applied: the song's automatic preset if there is one,
     // else the manual settings
     QVariantList eqShownGains() const;
@@ -282,7 +282,7 @@ private:
     double m_volume = 1.0, m_target = -10.0;
     bool m_eqOn = false, m_eqAuto = false;
     QString m_eqAutoName;
-    QVector<double> m_eqGains = QVector<double>(5, 0.0);
+    QVector<double> m_eqGains = QVector<double>(10, 0.0);
     QList<CustomEq> m_eqCustom;  // saved presets, by name
     void saveEqCustom();
     bool presetGains(const QString &name, QVector<double> &gains) const;

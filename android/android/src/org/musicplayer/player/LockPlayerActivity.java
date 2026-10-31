@@ -106,7 +106,7 @@ public class LockPlayerActivity extends Activity {
         }
     };
 
-    // the five bars move about thirty times a second
+    // the ten bars move about thirty times a second
     private final Runnable moving = new Runnable() {
         @Override
         public void run() {
@@ -313,7 +313,7 @@ public class LockPlayerActivity extends Activity {
         controlsLayout.setMargins(0, dp(10), 0, 0);
         page.addView(controls, controlsLayout);
 
-        // the five bands of the equalizer: its setting and the sound in each
+        // the ten bands of the equalizer: its setting and the sound in each
         eq = new EqView(this);
         LinearLayout.LayoutParams eqLayout =
             new LinearLayout.LayoutParams(-1, dp(108));
@@ -574,21 +574,22 @@ public class LockPlayerActivity extends Activity {
         }
     }
 
-    // Six vertical bars made of lit segments, like a vacuum fluorescent
+    // Eleven vertical bars made of lit segments, like a vacuum fluorescent
     // display: one for each band of the equalizer and, on the right, one for
     // the whole sound.  The dim track is the range of the setting (-12 to
     // +12 dB) and a white line across it is the setting; the lit segments
     // rising from the bottom are how loud the song is in that band.
     static final class EqView extends View {
-        private static final String[] NAMES = {"60 Hz", "230 Hz", "910 Hz",
-                                               "3.6 kHz", "14 kHz", "all"};
-        private static final int SEGMENTS = 16, COLUMNS = 6;
+        private static final String[] NAMES = {"31", "62", "125", "250", "500",
+                                               "1k", "2k", "4k", "8k", "16k",
+                                               "all"};
+        private static final int SEGMENTS = 16, BANDS = 10, COLUMNS = 11;
         // an 80s display seen through its blue filter
         private static final int LIT = Color.rgb(0, 210, 255),
                                  TIP = Color.rgb(190, 245, 255),
                                  DIM = Color.argb(34, 0, 210, 255),
                                  RED = Color.rgb(255, 36, 24);  // an LED
-        private final float[] gain = new float[5], shown = new float[COLUMNS],
+        private final float[] gain = new float[BANDS], shown = new float[COLUMNS],
                               peak = new float[COLUMNS];
         boolean live = false, bypassed = false, auto = false, locked = false;
         boolean touching = false;  // a finger is setting a band
@@ -603,12 +604,13 @@ public class LockPlayerActivity extends Activity {
         // values: see LockPlayerActivity.spectrum
         void set(float[] values) {
             live = values[0] != 0;
-            bypassed = values[12] != 0;
-            auto = values[13] != 0;
-            locked = values[14] != 0;
-            for (int b = 0; b < 5; ++b) gain[b] = values[1 + b];
+            int tail = 1 + BANDS + COLUMNS;  // after the gains and levels
+            bypassed = values[tail] != 0;
+            auto = values[tail + 1] != 0;
+            locked = values[tail + 2] != 0;
+            for (int b = 0; b < BANDS; ++b) gain[b] = values[1 + b];
             for (int b = 0; b < COLUMNS; ++b) {
-                float level = live ? values[6 + b] : 0;
+                float level = live ? values[1 + BANDS + b] : 0;
                 // rises at once, falls at a steady speed
                 shown[b] = level > shown[b] ? level
                                             : Math.max(level, shown[b] - 0.04f);
@@ -638,7 +640,7 @@ public class LockPlayerActivity extends Activity {
             }
             touching = true;
             int band = (int)(event.getX() / (getWidth() / (float)COLUMNS));
-            if (band < 0 || band > 4) return true;  // the whole sound has none
+            if (band < 0 || band >= BANDS) return true;  // the whole sound has none
             float middle = (trackTop + trackBottom) / 2f;
             float gain = (middle - event.getY()) /
                          ((trackBottom - trackTop) / 2f) * 12f;
@@ -658,7 +660,7 @@ public class LockPlayerActivity extends Activity {
             float label = 16 * d;
             trackTop = 30 * d;
             trackBottom = h - label;
-            float column = w / COLUMNS, bar = Math.min(column * 0.66f, 48 * d);
+            float column = w / COLUMNS, bar = Math.min(column * 0.7f, 48 * d);
             float gap = 2 * d;
             float segment = (trackBottom - trackTop - gap * (SEGMENTS - 1)) /
                             SEGMENTS;
@@ -678,7 +680,7 @@ public class LockPlayerActivity extends Activity {
                     canvas.drawRect(cx - bar / 2, bottom - segment,
                                     cx + bar / 2, bottom, paint);
                 }
-                if (b < 5) {  // the setting of the band
+                if (b < BANDS) {  // the setting of the band
                     float middle = (trackTop + trackBottom) / 2f;
                     float y = middle -
                               gain[b] / 12f * (trackBottom - trackTop) / 2f;
@@ -692,7 +694,7 @@ public class LockPlayerActivity extends Activity {
                                     cx + bar / 2 + 3 * d, y + 1.5f * d, paint);
                 }
                 paint.setColor(Color.argb(210, 226, 200, 150));  // champagne
-                paint.setTextSize(11 * d);
+                paint.setTextSize(10 * d);
                 canvas.drawText(NAMES[b], cx, h - 3 * d, paint);
             }
             // the name of the setting with an arrow on either side

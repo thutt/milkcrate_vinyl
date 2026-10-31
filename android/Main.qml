@@ -1087,13 +1087,13 @@ ApplicationWindow {
                 }
             }
             Repeater {
-                model: 5
+                model: 10
                 RowLayout {
                     Layout.fillWidth: true
                     TextMetrics {
                         id: bandWidth
                         font: bandText.font
-                        text: "3.6 kHz"  // the widest, so the bars line up
+                        text: "125 Hz"  // the widest, so the bars line up
                     }
                     Label {
                         id: bandText

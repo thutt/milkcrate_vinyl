@@ -15,11 +15,16 @@
 
 struct EqPreset {
     const char *name;
-    double gains[5];  // dB: 60 Hz, 230 Hz, 910 Hz, 3.6 kHz, 14 kHz
+    double gains[10];  // dB: 31 Hz, 62, 125, 250, 500 Hz, 1 kHz, 2, 4, 8, 16
 };
 
 extern const EqPreset eqPresets[];
 extern const int eqPresetCount;
+
+// Settings saved by the five-band equalizer (60 Hz, 230 Hz, 910 Hz, 3.6 kHz
+// and 14 kHz) as ten bands: each band gets the value interpolated, by the
+// logarithm of the frequency, between the two old bands around it.
+QVector<double> eqFromFive(const QVector<double> &five);
 
 // The preset for a song with these genres, or nullptr when none of them has
 // one (a genre such as "Workout" says nothing about the sound).  The genres
@@ -32,7 +37,7 @@ const EqPreset *eqPresetForGenres(const QStringList &genres);
 // tried; of several that match, the one with the longest name wins.
 struct CustomEq {
     QString name;
-    QVector<double> gains;  // dB, five bands
+    QVector<double> gains;  // dB, ten bands
 };
 
 // The index into customs of the preset for these genres, or -1.

@@ -51,12 +51,10 @@ public:
     // Automatic is on, and has chosen a preset for the song (the sliders and
     // the arrows are then locked), for the lock screen player
     std::atomic<bool> autoOn{false}, autoLocked{false};
-    // The same for the five bands of the equalizer, and the gain (dB) that
+    // The same for the ten bands of the equalizer, and the gain (dB) that
     // each has now, for the lock screen player.
-    std::atomic<float> spectrum[SpectrumMeter::Levels] = {{0}, {0}, {0},
-                                                          {0}, {0}, {0}};
-    std::atomic<float> shownGain[SpectrumMeter::Bands] = {{0}, {0}, {0}, {0},
-                                                          {0}};
+    std::atomic<float> spectrum[SpectrumMeter::Levels] = {};
+    std::atomic<float> shownGain[SpectrumMeter::Bands] = {};
     QString sectionText() const;  // "Warmup (1/3) — 4:12 left — 12:12 in all",
                                   // empty when no schedule plays
 

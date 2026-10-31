@@ -14,7 +14,7 @@ constexpr double Equalizer::Frequencies[Equalizer::Bands];
 static constexpr double Knee = 0.9;
 
 void Equalizer::configure(double sampleRate, const double *gainsDb) {
-    const double q = 0.9;
+    const double q = 1.4;  // an octave wide: the bands are an octave apart
     const double pi = 3.14159265358979323846;
     m_active = 0;
     for (int i = 0; i < Bands; ++i) {

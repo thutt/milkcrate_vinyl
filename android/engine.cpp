@@ -165,7 +165,8 @@ void Engine::lockAdjust(int what, int index, double value) {
         QVector<QVector<double>> all;
         for (int i = 0; i < eqPresetCount; ++i) {
             names << eqPresets[i].name;
-            all << QVector<double>(eqPresets[i].gains, eqPresets[i].gains + 5);
+            all << QVector<double>(eqPresets[i].gains,
+                                    eqPresets[i].gains + Equalizer::Bands);
         }
         for (const CustomEq &c : m_customs) {
             names << c.name;
@@ -193,7 +194,7 @@ void Engine::lockAdjust(int what, int index, double value) {
 // (the player changes its output only when the next song is loaded), with flat
 // gains.
 const double *Engine::eqGains() const {
-    static const double flat[Equalizer::Bands] = {0, 0, 0, 0, 0};
+    static const double flat[Equalizer::Bands] = {};
     if (!m_eqOn || bypassed) return flat;
     return m_eqAuto && m_autoChosen ? m_autoGains.constData()
                                     : m_eqGains.constData();
@@ -212,11 +213,12 @@ void Engine::chooseEqPreset() {
         if (custom >= 0) {
             m_autoName = m_customs[custom].name;
             m_autoGains = m_customs[custom].gains;
-            m_autoGains.resize(5);
+            m_autoGains.resize(Equalizer::Bands);
             m_autoChosen = true;
         } else if (const EqPreset *p = eqPresetForGenres(genres)) {
             m_autoName = p->name;
-            m_autoGains = QVector<double>(p->gains, p->gains + 5);
+            m_autoGains =
+                QVector<double>(p->gains, p->gains + Equalizer::Bands);
             m_autoChosen = true;
         }
     }

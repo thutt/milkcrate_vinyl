@@ -81,13 +81,15 @@ static void nativeAdjust(JNIEnv *, jclass, jint what, jint index,
             Qt::QueuedConnection);
 }
 
-// LockPlayerActivity.spectrum(): 15 numbers: whether the levels are being
-// measured (1 or 0), the gain in dB of each of the five bands of the
+// LockPlayerActivity.spectrum(): 25 numbers: whether the levels are being
+// measured (1 or 0), the gain in dB of each of the ten bands of the
 // equalizer, the level (0 to 1) of the sound in each band and in all, and
 // whether the equalizer is bypassed (1 or 0), and whether Automatic is on and
 // whether it has chosen a preset (1 or 0 each).
 static jfloatArray nativeSpectrum(JNIEnv *env, jclass) {
-    jfloat values[15] = {0};
+    constexpr int bands = SpectrumMeter::Bands, count = 1 + bands +
+        SpectrumMeter::Levels + 3;
+    jfloat values[count] = {0};
     if (g_engine) {
         qint64 at = g_engine->levelAt;
         qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -97,22 +99,22 @@ static jfloatArray nativeSpectrum(JNIEnv *env, jclass) {
         for (int b = 0; b < SpectrumMeter::Bands; ++b)
             values[1 + b] = g_engine->shownGain[b];
         for (int b = 0; b < SpectrumMeter::Levels; ++b)
-            values[6 + b] = g_engine->spectrum[b];
-        values[12] = g_engine->bypassed ? 1.f : 0.f;
-        values[13] = g_engine->autoOn ? 1.f : 0.f;
-        values[14] = g_engine->autoLocked ? 1.f : 0.f;
+            values[1 + bands + b] = g_engine->spectrum[b];
+        values[count - 3] = g_engine->bypassed ? 1.f : 0.f;
+        values[count - 2] = g_engine->autoOn ? 1.f : 0.f;
+        values[count - 1] = g_engine->autoLocked ? 1.f : 0.f;
     }
     static qint64 lastLogged = 0;
     qint64 stamp = QDateTime::currentMSecsSinceEpoch();
     if (stamp - lastLogged > 2000) {  // what the lock screen view is given
         lastLogged = stamp;
-        qInfo("lock view: live %g, gains %g %g %g %g %g, levels %g %g %g %g "
-              "%g, all %g", values[0], values[1], values[2], values[3],
-              values[4], values[5], values[6], values[7], values[8], values[9],
-              values[10], values[11]);
+        qInfo("lock view: live %g, gains %g %g %g %g %g %g %g %g %g %g, "
+              "all %g", values[0], values[1], values[2], values[3], values[4],
+              values[5], values[6], values[7], values[8], values[9],
+              values[10], values[1 + bands + bands]);
     }
-    jfloatArray out = env->NewFloatArray(15);
-    env->SetFloatArrayRegion(out, 0, 15, values);
+    jfloatArray out = env->NewFloatArray(count);
+    env->SetFloatArrayRegion(out, 0, count, values);
     return out;
 }
 #endif
@@ -130,6 +132,7 @@ Player::Player(QObject *parent)
     QStringList saved = m_settings.value("eqGains").toStringList();
     for (int i = 0; i < saved.size() && i < m_eqGains.size(); ++i)
         m_eqGains[i] = std::clamp(saved[i].toDouble(), -12.0, 12.0);
+    if (saved.size() == 5) m_eqGains = eqFromFive(m_eqGains.mid(0, 5));
     const QJsonArray custom = QJsonDocument::fromJson(
         m_settings.value("eqCustom").toString().toUtf8()).array();
     for (const QJsonValue &v : custom) {
@@ -137,7 +140,8 @@ Player::Player(QObject *parent)
         c.name = v.toObject()["name"].toString();
         for (const QJsonValue &g : v.toObject()["gains"].toArray())
             c.gains << std::clamp(g.toDouble(), -12.0, 12.0);
-        c.gains.resize(5);
+        if (c.gains.size() == 5) c.gains = eqFromFive(c.gains);
+        c.gains.resize(10);
         if (!c.name.isEmpty()) m_eqCustom << c;
     }
     m_shuffle = m_settings.value("shuffle", false).toBool();
@@ -817,7 +821,8 @@ void Player::setAnnounceWhat(int what) {
 
 
 QStringList Player::eqBands() const {
-    return {"60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz"};
+    return {"31 Hz", "62 Hz", "125 Hz", "250 Hz", "500 Hz",
+            "1 kHz",  "2 kHz",  "4 kHz",   "8 kHz",   "16 kHz"};
 }
 
 QStringList Player::eqPresets() const {
@@ -837,7 +842,7 @@ bool Player::presetGains(const QString &name, QVector<double> &gains) const {
     for (int i = 0; i < eqPresetCount; ++i)
         if (name == ::eqPresets[i].name) {
             gains = QVector<double>(::eqPresets[i].gains,
-                                    ::eqPresets[i].gains + 5);
+                                    ::eqPresets[i].gains + 10);
             return true;
         }
     for (const CustomEq &c : m_eqCustom)

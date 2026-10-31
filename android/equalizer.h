@@ -5,14 +5,16 @@
 // by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
 // see the file LICENSE for the license text.
 //
-// Five-band equalizer for interleaved stereo float samples: one peaking
+// Ten-band equalizer (one octave apart) for interleaved stereo float samples: one peaking
 // filter per band (RBJ biquads), so a gain of 0 dB leaves a band untouched.
 #pragma once
 
 class Equalizer {
 public:
-    static constexpr int Bands = 5;
-    static constexpr double Frequencies[Bands] = {60, 230, 910, 3600, 14000};
+    static constexpr int Bands = 10;
+    static constexpr double Frequencies[Bands] = {31,   62,   125,  250,
+                                                  500,  1000, 2000, 4000,
+                                                  8000, 16000};
     static constexpr double MaxGainDb = 12;
 
     // gainsDb: Bands values in dB (-MaxGainDb to MaxGainDb); a band whose

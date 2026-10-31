@@ -7,29 +7,49 @@
 //
 #include "eqpresets.h"
 
+#include <algorithm>
+#include <cmath>
+
 // Normal, Rock, Metal (Android's Heavy Metal), Pop, Hip-hop, Electronic /
 // Dance, Jazz, Classical and Folk / Acoustic are the presets of Android's own
-// equalizer (the AOSP LVM effect), which has the same five bands; Punk,
+// equalizer (the AOSP LVM effect), which has five bands (drawn out to ten here, see eqFromFive); Punk,
 // Country, Vocal, Bass boost, Treble boost and Loudness are ours.
 const EqPreset eqPresets[] = {
-    {"Flat", {0, 0, 0, 0, 0}},
-    {"Normal", {3, 0, 0, 0, 3}},
-    {"Rock", {5, 3, -1, 3, 5}},
-    {"Metal", {4, 1, 9, 3, 0}},
-    {"Punk", {3, 0, -2, 4, 3}},
-    {"Pop", {-1, 2, 5, 1, -2}},
-    {"Hip-hop / R&B", {5, 3, 0, 1, 3}},
-    {"Electronic / Dance", {6, 0, 2, 4, 1}},
-    {"Jazz", {4, 2, -2, 2, 5}},
-    {"Classical", {5, 3, -2, 4, 4}},
-    {"Folk / Acoustic", {3, 0, 0, 2, -1}},
-    {"Country", {2, 1, 1, 3, 2}},
-    {"Vocal", {-2, -1, 3, 4, 1}},
-    {"Bass boost", {7, 5, 1, 0, 0}},
-    {"Treble boost", {0, 0, 0, 4, 7}},
-    {"Loudness", {6, 3, 0, 2, 5}},
+    {"Flat", {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+    {"Normal", {3, 3, 1, 0, 0, 0, 0, 0, 2, 3}},
+    {"Rock", {5, 5, 4, 3, 1, -1, 1, 3, 4, 5}},
+    {"Metal", {4, 4, 2, 1, 6, 9, 6, 3, 1, 0}},
+    {"Punk", {3, 3, 1, 0, -1, -2, 1, 4, 3, 3}},
+    {"Pop", {-1, -1, 1, 2, 4, 5, 3, 1, -1, -2}},
+    {"Hip-hop / R&B", {5, 5, 4, 3, 1, 0, 1, 1, 2, 3}},
+    {"Electronic / Dance", {6, 6, 3, 0, 1, 2, 3, 4, 2, 1}},
+    {"Jazz", {4, 4, 3, 2, 0, -2, 0, 2, 4, 5}},
+    {"Classical", {5, 5, 4, 3, 0, -2, 1, 4, 4, 4}},
+    {"Folk / Acoustic", {3, 3, 1, 0, 0, 0, 1, 2, 0, -1}},
+    {"Country", {2, 2, 1, 1, 1, 1, 2, 3, 2, 2}},
+    {"Vocal", {-2, -2, -1, -1, 1, 3, 4, 4, 2, 1}},
+    {"Bass boost", {7, 7, 6, 5, 3, 1, 0, 0, 0, 0}},
+    {"Treble boost", {0, 0, 0, 0, 0, 0, 2, 4, 6, 7}},
+    {"Loudness", {6, 6, 4, 3, 1, 0, 1, 2, 4, 5}},
 };
 const int eqPresetCount = sizeof(eqPresets) / sizeof(eqPresets[0]);
+
+QVector<double> eqFromFive(const QVector<double> &five) {
+    static const double from[5] = {60, 230, 910, 3600, 14000};
+    static const double to[10] = {31, 62, 125, 250, 500,
+                                  1000, 2000, 4000, 8000, 16000};
+    QVector<double> out(10, 0.0);
+    if (five.size() != 5) return out;
+    for (int i = 0; i < 10; ++i) {
+        const double x = std::log(to[i]);
+        int k = 0;
+        while (k < 3 && x > std::log(from[k + 1])) ++k;
+        const double a = std::log(from[k]), b = std::log(from[k + 1]);
+        const double t = std::clamp((x - a) / (b - a), 0.0, 1.0);
+        out[i] = std::round(five[k] + t * (five[k + 1] - five[k]));
+    }
+    return out;
+}
 
 namespace {
 // A genre that contains one of the words (capitals ignored) selects the

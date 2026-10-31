@@ -127,17 +127,22 @@ private:
     bool m_fresh = false;
 };
 
-// The same measure for the five bands of the equalizer (60 Hz, 230 Hz, 910 Hz,
-// 3.6 kHz and 14 kHz), for the five bars of the lock screen player.  Each band
-// is a second-order band-pass about two octaves wide; the levels are weighted
+// The same measure for the ten bands of the equalizer (31 Hz to 16 kHz, an
+// octave apart), for the ten bars of the lock screen player.  Each band
+// is a second-order band-pass about an octave wide; the levels are weighted
 // to make up for the music's tilt toward the bass and compared with the
 // loudest band lately, as in BandMeter.  A sixth level is the whole sound, all
 // the bands together, compared with its own recent peak.
 class SpectrumMeter {
 public:
-    static constexpr int Bands = 5;
-    static constexpr double Centre[Bands] = {60, 230, 910, 3600, 14000};
-    static constexpr double Weight[Bands] = {1.0, 1.8, 3.5, 7.0, 14.0};
+    static constexpr int Bands = 10;
+    static constexpr double Centre[Bands] = {31,   62,   125,  250,
+                                             500,  1000, 2000, 4000,
+                                             8000, 16000};
+    // the tilt of the music: the weight grows as the square root of the
+    // frequency (1 at 62 Hz)
+    static constexpr double Weight[Bands] = {0.7, 1.0, 1.4, 2.0, 2.8,
+                                             4.0, 5.7, 8.0, 11.3, 16.0};
     static constexpr int Levels = Bands + 1;  // the bands and the whole
     static constexpr double RangeDb = 36;
     static constexpr double StartPeak = 0.1;
@@ -206,7 +211,7 @@ private:
         void design(double frequency, int rate) {
             const double pi = 3.14159265358979323846;
             double w0 = 2 * pi * std::min(frequency, 0.45 * rate) / rate;
-            double alpha = std::sin(w0) / (2 * 0.8);  // Q 0.8
+            double alpha = std::sin(w0) / (2 * 1.4);  // Q 1.4
             double c = std::cos(w0), a0 = 1 + alpha;
             b0 = alpha / a0;  // the band-pass of unity gain at the centre
             b2 = -alpha / a0;
@@ -222,8 +227,8 @@ private:
     };
     int m_rate = 0, m_window = 1, m_count = 0;
     Band m_filter[Bands];
-    double m_sum[Bands] = {0, 0, 0, 0, 0}, m_peak = StartPeak;
+    double m_sum[Bands] = {}, m_peak = StartPeak;
     double m_wholeSum = 0, m_wholePeak = StartPeak;
-    float m_level[Levels] = {0, 0, 0, 0, 0, 0};
+    float m_level[Levels] = {};
     bool m_fresh = false;
 };
