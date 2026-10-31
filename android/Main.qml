@@ -1267,6 +1267,10 @@ ApplicationWindow {
             }
         }
         MenuItem {
+            text: "Announce songs..."; font.pixelSize: 18; height: 52
+            onTriggered: announceDialog.open()
+        }
+        MenuItem {
             text: "Equalizer..."; font.pixelSize: 18; height: 52
             onTriggered: equalizer.open()
         }
@@ -1366,6 +1370,50 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // the phone's voice says the name of each song that starts
+    PopupDialog {
+        id: announceDialog
+        title: "Announce songs"
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            Label { text: "How" }
+            ComboBox {
+                Layout.fillWidth: true
+                model: ["Off", "Over the start of the song",
+                        "Before the song starts",
+                        "Over the start, after a skip only"]
+                currentIndex: player.announceMode
+                onActivated: player.announceMode = currentIndex
+            }
+            Label { text: "What is said" }
+            ComboBox {
+                Layout.fillWidth: true
+                enabled: player.announceMode > 0
+                model: ["The title", "The title and the artist",
+                        "The title, the artist and the album"]
+                currentIndex: player.announceWhat
+                onActivated: player.announceWhat = currentIndex
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.7
+                text: player.announceMode === 1
+                      ? "The music is quieter while the name is said."
+                      : player.announceMode === 2
+                        ? "The song starts when the name has been said."
+                        : player.announceMode === 3
+                          ? "As the first, but only for a song that you " +
+                            "chose or skipped to, not one that follows " +
+                            "the last by itself."
+                          : "The voice and the language are those of the " +
+                          "phone's text-to-speech settings."
             }
         }
     }

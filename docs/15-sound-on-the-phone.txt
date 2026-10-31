@@ -363,3 +363,28 @@ Limits
   * When the output device does not take a song's sample rate, the
     sound is converted to the device's rate, with simple interpolation.
   * The equalizer is not in the desktop programs.
+
+
+Announcing the songs
+--------------------
+
+Under "..." > Announce songs the phone's voice (its text-to-speech) can say
+the name of each song that starts.  Two choices:
+
+  How       Off (at first); Over the start of the song, where the music is
+            quieter (30% of its volume) while the name is said; Before the
+            song starts, where the old song stops, the name is said and the
+            song begins when the voice has ended; Over the start, after a
+            skip only, as the second but only for a song that was chosen
+            (a skip, Previous, a tap on a list), not for one that follows
+            the last by itself.
+  What      The title; the title and the artist; the title, the artist and
+            the album.
+
+The voice and the language are those of the phone (Settings > General
+management > Text-to-speech); the app has none of its own.  A name is said
+when a different song starts, not when the same song starts again, or
+after a pause.  Choosing another song while a name is said cuts the voice
+off.  Play while a name is said before a song starts the song at once.  If
+the voice cannot start, or takes more than 9 seconds, the song starts
+without it.

@@ -33,6 +33,12 @@
     <supports-screens android:anyDensity="true"
         android:largeScreens="true" android:normalScreens="true"
         android:smallScreens="true"/>
+    <!-- the app sees text-to-speech engines (Android 11 and later) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
+    </queries>
     <application android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:name="org.qtproject.qt.android.bindings.QtApplication"

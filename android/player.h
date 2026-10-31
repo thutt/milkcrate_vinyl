@@ -40,6 +40,14 @@ class Player : public QObject {
     Q_PROPERTY(double target READ target WRITE setTarget NOTIFY volumeChanged)
     Q_PROPERTY(
         bool leveling READ leveling WRITE setLeveling NOTIFY volumeChanged)
+    // saying the name of a song that starts (see Engine::setAnnounce): how
+    // (0 off, 1 over the start of the song, 2 before it, 3 over the
+    // start after a skip only) and what (0 the
+    // title, 1 and the artist, 2 and the album)
+    Q_PROPERTY(int announceMode READ announceMode WRITE setAnnounceMode NOTIFY
+                   announceChanged)
+    Q_PROPERTY(int announceWhat READ announceWhat WRITE setAnnounceWhat NOTIFY
+                   announceChanged)
     Q_PROPERTY(bool eqOn READ eqOn WRITE setEqOn NOTIFY eqChanged)
     Q_PROPERTY(QVariantList eqGains READ eqGains NOTIFY eqChanged)
     Q_PROPERTY(bool eqAuto READ eqAuto WRITE setEqAuto NOTIFY eqChanged)
@@ -107,6 +115,10 @@ public:
     double volume() const { return m_volume; }
     double target() const { return m_target; }
     bool leveling() const { return m_leveling; }
+    int announceMode() const { return m_announceMode; }
+    int announceWhat() const { return m_announceWhat; }
+    void setAnnounceMode(int mode);
+    void setAnnounceWhat(int what);
     bool eqOn() const { return m_eqOn; }
     bool eqAuto() const { return m_eqAuto; }
     // "": the song has no genre with a preset
@@ -201,6 +213,7 @@ public:
     Q_INVOKABLE void previous();
     Q_INVOKABLE void seek(qint64 ms);
 signals:
+    void announceChanged();
     void statsChanged();  // the plays of the songs were read again
     void currentChanged();
     void bpmChanged();
@@ -228,6 +241,7 @@ private:
     void say(const QString &text);
     void keepScreenOn(bool on);
     void pushVolume();
+    void pushAnnounce();
     void requestAudioPermission();
     QString defaultDataDir() const;
     QString findLibrary()
@@ -264,6 +278,7 @@ private:
     bool isDynamic(qint64 playlistId) const;
     int m_rating = -1;  // of the playing track; -1 = not rated
     bool m_shuffle = false, m_leveling = true, m_needsFilesAccess = false;
+    int m_announceMode = 0, m_announceWhat = 1;
     double m_volume = 1.0, m_target = -10.0;
     bool m_eqOn = false, m_eqAuto = false;
     QString m_eqAutoName;

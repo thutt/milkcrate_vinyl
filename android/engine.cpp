@@ -94,7 +94,8 @@ void Engine::init() {
 // target and the track's loudness (the output cannot go above full).
 void Engine::applyVolume() {
     double gain = (m_leveling && m_measured) ? m_target - m_loudness : 0.0;
-    double v = std::min(1.0, m_volume * m_fade * std::pow(10.0, gain / 20.0));
+    double v = std::min(
+        1.0, m_volume * m_fade * m_duck * std::pow(10.0, gain / 20.0));
     m_audio->setVolume(v);
     m_gain = m_muted ? 0.0f : float(v);  // used before the equalizer
 }
@@ -537,10 +538,75 @@ void Engine::setShuffle(bool on) {
     buildOrder(row, true);
 }
 
+// A new song may be announced first (mode 2): the old one is silenced, the
+// name is said, and startCurrent follows when the voice has ended.
 void Engine::playCurrent() {
+    if (m_pos < 0 || m_pos >= m_order.size()) return;
+    const QueueItem &t = m_order[m_pos];
+    ++m_announceId;  // whatever is being said belongs to a song left
+    m_announceWaiting = false;
+    m_duck = 1.0;
+    const QString text = announcement(t);
+    if (m_announce == 2 && t.id != m_currentId && !text.isEmpty()) {
+        m_player->pause();
+        flushAudio();
+        m_announceWaiting = true;
+        m_queueEnded = false;
+        say(t);
+        return;
+    }
+    startCurrent();
+}
+
+QString Engine::announcement(const QueueItem &t) const {
+    if (m_announce == 0 || t.title.isEmpty()) return {};
+    QString text = t.title;
+    if (m_announceWhat >= 1 && !t.artist.isEmpty())
+        text += ", by " + t.artist;
+    if (m_announceWhat >= 2 && !t.album.isEmpty())
+        text += ", from " + t.album;
+    return text;
+}
+
+// The voice is the phone's own text-to-speech (Announcer.java); it calls
+// announceDone when it has ended, and a timer ends the wait when it does not.
+void Engine::say(const QueueItem &t) {
+#ifdef Q_OS_ANDROID
+    const quint64 id = m_announceId;
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/Announcer", "say",
+        "(Landroid/content/Context;Ljava/lang/String;J)V", context.object(),
+        QJniObject::fromString(announcement(t)).object<jstring>(), jlong(id));
+    QTimer::singleShot(9000, this, [this, id] { announceDone(id); });
+#else
+    Q_UNUSED(t)
+    announceDone(m_announceId);
+#endif
+}
+
+void Engine::announceDone(quint64 id) {
+    if (id != m_announceId) return;  // a song later: not this one
+    if (m_duck != 1.0) {
+        m_duck = 1.0;
+        applyVolume();
+    }
+    if (m_announceWaiting) {
+        m_announceWaiting = false;
+        startCurrent();
+    }
+}
+
+void Engine::setAnnounce(int mode, int what) {
+    m_announce = mode;
+    m_announceWhat = what;
+}
+
+void Engine::startCurrent() {
     if (m_pos < 0 || m_pos >= m_order.size()) return;
     m_queueEnded = false;
     const QueueItem &t = m_order[m_pos];
+    const bool changed = m_currentId != t.id;
     QElapsedTimer total;  // where the time goes when a song is started
     total.start();
     QString laps;
@@ -614,6 +680,12 @@ void Engine::playCurrent() {
     m_player->play();
     if (!m_naturalEnd) dropStale();  // what the old song still delivers
     lap("play");
+    if (changed && !announcement(t).isEmpty() &&
+        (m_announce == 1 || (m_announce == 3 && !m_naturalEnd))) {
+        m_duck = 0.3;  // the music under the voice
+        applyVolume();
+        say(t);
+    }
     qInfo("song change took %lld ms (%lld ms choosing the song before it)%s",
           total.elapsed(), m_choiceMs, qPrintable(laps));
     m_choiceMs = 0;
@@ -626,6 +698,10 @@ void Engine::resume() {
 }
 
 void Engine::toggle() {
+    if (m_announceWaiting) {  // Play while the name is said: the song now
+        announceDone(m_announceId);
+        return;
+    }
     if (m_currentId < 0) return;
     if (m_queueEnded) {  // Play after the end: the list from the top
         if (m_listId >= 0 && m_follow) {

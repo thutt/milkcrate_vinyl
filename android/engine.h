@@ -86,6 +86,12 @@ public slots:
     void seek(qint64 ms);
     void setShuffle(bool on);
     void setVolume(double volume, double target, bool leveling);
+    // Saying the name of a song that starts: mode 0 off, 1 over the start of
+    // the song with the music quieter, 2 before the song, 3 as 1 but only
+    // when the song was chosen (a skip), not when the last one ended; what
+    // 0 the title, 1 the title and the artist, 2 also the album.
+    void setAnnounce(int mode, int what);
+    void announceDone(quint64 id);  // the voice has ended (or took too long)
     // gains: dB per band.  automatic: the song's genres choose a preset (see
     // eqpresets.h) and the gains are used for songs that get none.
     // The lock screen player changes the equalizer here, in the engine's
@@ -121,6 +127,9 @@ private:
                          // background
     void buildOrder(int startRow, bool keepFirst);
     void playCurrent();
+    void startCurrent();  // the song at m_pos, now (playCurrent may announce)
+    QString announcement(const QueueItem &t) const;
+    void say(const QueueItem &t);
     void applyVolume();
     void kickStalledStart(qint64 dt);  // see engine.cpp
     // The equalizer.  Off, the player plays through its own audio output.  On,
@@ -199,6 +208,10 @@ private:
     bool m_pending =
         false;  // "finish": the limit has passed, the track playing is the last
     double m_fade = 1.0;
+    double m_duck = 1.0;  // the music is quieter while a name is said
+    int m_announce = 0, m_announceWhat = 1;
+    quint64 m_announceId = 0;  // the announcement that counts; older ones end
+    bool m_announceWaiting = false;  // the song starts when the voice ends
     QTimer *m_clock = nullptr;
     QElapsedTimer m_lastTick;
     mutable QMutex m_textLock;
