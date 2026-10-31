@@ -1,0 +1,83 @@
+#!/bin/bash
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Runs under bash or zsh.  Paths are found from the location of this script.
+#
+# Builds the phone's program (scripts/build-for-android) and packs it with the
+# desktop programs, the Windows scripts (windows/*.bat) and the documents into
+# ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-VERSION-windows.zip, which Windows
+# unzips (see windows/README.txt).  With --no-build the program already built
+# in the BOD is used.  The scripts and the README get Windows line ends.
+set -o errexit
+set -o nounset
+set -o pipefail
+here=$(cd "$(dirname "${0}")" && pwd)
+root=$(dirname "${here}")
+# no .pyc files, also in anything Python starts
+export PYTHONDONTWRITEBYTECODE=1
+. "${here}/require-venv"
+music_require_bod
+
+build=1
+if [ "${#}" -gt 0 ]; then
+    if [ "${1}" = "--no-build" ] && [ "${#}" -eq 1 ]; then
+        build=0
+    else
+        echo "usage: package-for-windows [--no-build]" >&2
+        exit 1
+    fi
+fi
+
+if [ "${build}" -eq 1 ]; then
+    "${here}/build-for-android"
+fi
+apk="${MILKCRATEVINYL_BOD}/milkcrate-vinyl-arm64_v8a.apk"
+if [ ! -f "${apk}" ]; then
+    echo "error: ${apk} is missing; build it first." >&2
+    exit 1
+fi
+version=$(git -C "${root}" describe --always --dirty)
+zip_file="${MILKCRATEVINYL_BOD}/milkcrate-vinyl-${version}-windows.zip"
+
+python3 -I -B - "${root}" "${apk}" "${zip_file}" "milkcrate-vinyl-${version}" \
+    <<'PY'
+import os
+import sys
+import zipfile
+
+root, apk, zip_file, top = sys.argv[1:5]
+CRLF = (".bat", ".txt", ".md")  # text that Windows editors expect so
+
+
+def entries():
+    yield os.path.join(root, "LICENSE"), "LICENSE"
+    yield os.path.join(root, "README.md"), "README.md"
+    yield os.path.join(root, "windows", "README.txt"), "README-WINDOWS.txt"
+    yield apk, os.path.basename(apk)
+    for folder, target, suffixes in (
+        ("desktop", "desktop", (".py", ".txt")),
+        ("android/tools", "android/tools", (".py",)),
+        ("docs", "docs", (".txt",)),
+        ("windows", "scripts", (".bat",)),
+    ):
+        base = os.path.join(root, folder)
+        for name in sorted(os.listdir(base)):
+            if name.endswith(suffixes):
+                yield os.path.join(base, name), f"{target}/{name}"
+
+
+count = 0
+with zipfile.ZipFile(zip_file, "w", zipfile.ZIP_DEFLATED) as z:
+    for source, name in entries():
+        data = open(source, "rb").read()
+        if name.endswith(CRLF) and b"\r\n" not in data:
+            data = data.replace(b"\n", b"\r\n")
+        z.writestr(f"{top}/{name}", data)
+        count += 1
+print(f"{count} files in {zip_file}")
+PY
