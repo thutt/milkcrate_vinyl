@@ -49,16 +49,17 @@ While music plays and the phone is locked, turning the screen on (the power
 button) shows a full-screen player over the lock screen instead of the plain
 lock screen: the program's icon and name (upper left), the clock, the cover,
 the title, artist and album, a seek bar with the time played and left, the
-buttons Previous, Play/Pause and Next, six vertical bars, and the rating: a
+buttons Previous, Play/Pause and Next, eleven vertical bars, and the rating: a
 star holding the number of stars (a dash when the song is not rated) with a
 down arrow and an up arrow on either side, which take one star off or add one.
 
 The bars are made of lit segments, in a filtered blue, like an 80s display.
-Five are the bands of the equalizer (60 Hz to 14 kHz): the dim segments are
+Ten are the bands of the equalizer (31 Hz to 16 kHz, named 31, 62, 125, 250,
+500, 1k, 2k, 4k, 8k and 16k): the dim segments are
 the range of the setting (-12 to +12 dB), the muted orange line across them is
 the setting now in use (also a preset chosen by Automatic), and the lit
 segments from the bottom are how loud the song is in that band, as with the
-three bars of the song list. The sixth bar, on the right, is the whole sound,
+three bars of the song list. The eleventh bar, on the right, is the whole sound,
 all the bands together. The top segment of a bar is pushed up at once by a
 loud moment and is pale while it is the end of the bar; once it starts to sink
 it turns LED red and sinks slowly (about five seconds from the top), while the
@@ -70,7 +71,7 @@ not measured then.
 The name of the setting has an arrow on either side: tap the left one for the
 previous preset and the right one for the next (the built-in ones, then the
 saved ones, round the list), as the arrows of the equalizer dialog do.  A
-finger dragged in a column of the five bands sets that band, -12 to +12 dB in
+finger dragged in a column of the ten bands sets that band, -12 to +12 dB in
 steps of 1 (the orange line follows).  While Automatic has chosen a preset the
 arrows and the sliders are locked, as in the dialog. Under the bars are two
 switches: "Auto EQ: On/Off" turns Automatic on or off, and "EQ: On/Off" plays
@@ -120,38 +121,49 @@ It is text only; the EQ button changes the settings.
                     next song plays without the equalizer.
   Preset            A list of settings, below.  The box reads "Custom"
                     when the sliders match none.
-  Sliders           Five bands, -12 to +12 dB each: 60 Hz, 230 Hz,
-                    910 Hz, 3.6 kHz and 14 kHz.
+  Sliders           Ten bands, an octave apart, -12 to +12 dB each:
+                    31 Hz, 62 Hz, 125 Hz, 250 Hz, 500 Hz, 1 kHz, 2 kHz,
+                    4 kHz, 8 kHz and 16 kHz.  Each is an octave wide, so
+                    neighbouring bands overlap, and boosting several of
+                    them adds up.
 
 Moving a slider or choosing a preset changes the sound at once while
 the equalizer is on.  The settings are kept between runs.  A boost does
 not lower the overall level; peaks that a boost would push past full
 scale are rounded off.
 
-Presets (dB for the five bands, low to high):
+Presets (dB for the ten bands, low to high):
 
-  Flat                  0   0   0   0   0
-  Normal               +3   0   0   0  +3
-  Rock                 +5  +3  -1  +3  +5
-  Metal                +4  +1  +9  +3   0
-  Punk                 +3   0  -2  +4  +3
-  Pop                  -1  +2  +5  +1  -2
-  Hip-hop / R&B        +5  +3   0  +1  +3
-  Electronic / Dance   +6   0  +2  +4  +1
-  Jazz                 +4  +2  -2  +2  +5
-  Classical            +5  +3  -2  +4  +4
-  Folk / Acoustic      +3   0   0  +2  -1
-  Country              +2  +1  +1  +3  +2
-  Vocal                -2  -1  +3  +4  +1
-  Bass boost           +7  +5  +1   0   0
-  Treble boost          0   0   0  +4  +7
-  Loudness             +6  +3   0  +2  +5
+                        31  62 125 250 500  1k  2k  4k  8k 16k
+  Flat                   0   0   0   0   0   0   0   0   0   0
+  Normal                +3  +3  +1   0   0   0   0   0  +2  +3
+  Rock                  +5  +5  +4  +3  +1  -1  +1  +3  +4  +5
+  Metal                 +4  +4  +2  +1  +6  +9  +6  +3  +1   0
+  Punk                  +3  +3  +1   0  -1  -2  +1  +4  +3  +3
+  Pop                   -1  -1  +1  +2  +4  +5  +3  +1  -1  -2
+  Hip-hop / R&B         +5  +5  +4  +3  +1   0  +1  +1  +2  +3
+  Electronic / Dance    +6  +6  +3   0  +1  +2  +3  +4  +2  +1
+  Jazz                  +4  +4  +3  +2   0  -2   0  +2  +4  +5
+  Classical             +5  +5  +4  +3   0  -2  +1  +4  +4  +4
+  Folk / Acoustic       +3  +3  +1   0   0   0  +1  +2   0  -1
+  Country               +2  +2  +1  +1  +1  +1  +2  +3  +2  +2
+  Vocal                 -2  -2  -1  -1  +1  +3  +4  +4  +2  +1
+  Bass boost            +7  +7  +6  +5  +3  +1   0   0   0   0
+  Treble boost           0   0   0   0   0   0  +2  +4  +6  +7
+  Loudness              +6  +6  +4  +3  +1   0  +1  +2  +4  +5
 
 Normal, Rock, Metal, Pop, Hip-hop / R&B, Electronic / Dance, Jazz,
 Classical and Folk / Acoustic are the presets of Android's own
 equalizer (called Normal, Rock, Heavy Metal, Pop, Hip Hop, Dance, Jazz,
-Classical and Folk there), which has the same five bands.  The others
-are our own guesses.  The values are starting points, not a standard.
+Classical and Folk there), which has five bands.  The values of those
+five were spread over the ten bands by interpolation between the old
+bands (on the logarithm of the frequency, rounded to whole dB), so the
+curves are the same, drawn smoothly.  The others are our own guesses.
+The values are starting points, not a standard.
+
+Settings saved by the earlier five-band equalizer (the sliders and the
+saved presets) are converted in the same way the first time the program
+runs, and are kept with ten values after that.
 
 In the equalizer dialog the preset's name is shown between a left and a
 right arrow.  The arrows select the previous or the next preset in the
@@ -189,7 +201,7 @@ kept between 40 and 240.
 Saved presets
 -------------
 
-"Save as..." under the sliders keeps the five sliders under a name.
+"Save as..." under the sliders keeps the ten sliders under a name.
 Give a name that is not a built-in preset's (the name "Custom" is also
 taken); a name already saved is replaced.  A saved preset joins the
 arrow list after the built-in ones, in alphabetical order, and is
