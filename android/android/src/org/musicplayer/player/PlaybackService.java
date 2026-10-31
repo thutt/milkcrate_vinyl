@@ -67,6 +67,9 @@ public class PlaybackService extends Service {
     private boolean foreground = false;
     private AudioManager audioManager;
     private boolean playingNow = false;
+    // shown by a head unit before the title: 1 when a Bluetooth output
+    // connects, then one more for each song
+    private long trackNumber = 1;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService covers = Executors.newSingleThreadExecutor();
     private final BroadcastReceiver screenOn = new BroadcastReceiver() {
@@ -91,8 +94,13 @@ public class PlaybackService extends Service {
     private final AudioDeviceCallback outputs = new AudioDeviceCallback() {
         @Override
         public void onAudioDevicesAdded(AudioDeviceInfo[] added) {
-            for (AudioDeviceInfo device : added)
+            for (AudioDeviceInfo device : added) {
                 BluetoothVolume.connected(PlaybackService.this, device);
+                if (device.isSink() &&
+                    (device.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                     device.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO))
+                    trackNumber = 1;
+            }
         }
 
         @Override
@@ -184,9 +192,8 @@ public class PlaybackService extends Service {
     }
 
     /** Called from C++ whenever the track or the play state changes. */
-    // phase: what the title line shows, for head units that have one line for
-    // it: 0 the song's title, 1 the stars and the time left, and the
-    // title in place of the album (swapped every 10 s)
+    // phase: what the album line shows, for head units that have one line for
+    // it: 0 the album, 1 the stars and the time left (swapped every 10 s)
     public static void update(Context context, String title, String artist,
                               String album, String path, boolean playing,
                               long position,
@@ -414,22 +421,26 @@ public class PlaybackService extends Service {
                       int rating) {
         if (playing) takeFocus();
         if (playing) pausedByFocus = false;  // started again by the listener
+        if (path != null && !path.equals(LockPlayerActivity.state.path) &&
+            !LockPlayerActivity.state.path.isEmpty())
+            ++trackNumber;  // a new song: the next number
         remember(title, artist, album, path, playing, position, duration,
                  rating);
         String time = left(position, duration);
         String info =
             stars(rating) + (time.isEmpty() ? "" : "  \u00b7  " + time);
         String line = artist + "  \u00b7  " + info;  // the notification
-        // A head unit may show one line for the title: it alternates between
-        // the song's title and the stars and time left, and the album line
-        // between the album and the song's title.  The artist stays.
+        // A head unit may show one line for the album: it alternates between
+        // the album and the stars and time left.  The title and the artist
+        // stay.  A head unit shows a track number before the title: it counts
+        // the songs played since the phone connected to the sound output.
         session.setMetadata(
             new MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE,
-                           phase == 1 ? info : title)
+                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
                 .putString(MediaMetadata.METADATA_KEY_ALBUM,
-                           phase == 1 ? title : album)
+                           phase == 1 ? info : album)
+                .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, trackNumber)
                 .putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
                 .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART,
                            LockPlayerActivity.state.cover)

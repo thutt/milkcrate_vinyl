@@ -123,10 +123,17 @@ of the song is not known yet, the time is left out.  The same text goes
 to the car's display, if the car shows the artist line.
 
 Many head units show the title, the artist and the album, one line
-each, and cannot show more.  The artist and the album are sent as they
-are.  The title line alternates every 10 seconds between the song's
-title and the rating with the time left ("4 *  .  -3:42"); each song
-starts with its title, and a paused player shows the title.
+each, and cannot show more.  The title and the artist are sent as they
+are.  The album line alternates every 10 seconds between the album and
+the rating with the time left ("4 *  .  -3:42"); each song starts with
+its album, and a paused player shows the album.
+
+A head unit also shows a track number before the title ("03  Title").
+The number is not the one stored with the file: it counts the songs
+played since the phone connected to the car.  It is 1 when a Bluetooth
+sound output connects, and one more for each song that starts, whatever
+the order or the playlist.  Without a number Android sends 1, and the
+car would show "01" before every title.
 
 Updating the playlists
 ----------------------

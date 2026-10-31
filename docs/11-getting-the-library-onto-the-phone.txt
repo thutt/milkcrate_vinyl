@@ -184,10 +184,12 @@ the last played time and how long the song was heard in its latest play
 ("Listened", minutes:seconds; blank when the phone did not record it).  The
 phone writes the time when the song ends or is left, and only for a song that
 counted as played (20 seconds); the desktop database gets the column when it
-is opened.  Click a star to rate a song (a song
-not yet rated shows five faint stars; a click anywhere else in the cell
-changes nothing), or select songs and press 0 to 5 (Delete: not rated);
-right-click > Rate does the same.  "Only songs that are not rated" shows
+is opened.  The rating cell shows a "0" and five
+stars.  Click a star to give that many stars, or the "0" to give zero stars
+(a song not yet rated shows them all faint, and zero stars shows the "0" in
+full; a double-click makes a song not rated; a click anywhere else in the
+cell changes nothing).  Or select songs and press 0 to 5 (Delete: not
+rated); right-click > Rate does the same.  "Only songs that are not rated" shows
 the ones still to rate.  The ratings given are only shown in the list
 until Apply stores them: Apply then takes every rated song off the list
 and leaves the window open for the songs that are still not rated, so

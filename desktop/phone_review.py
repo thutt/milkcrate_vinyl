@@ -16,6 +16,7 @@ from PyQt6.QtCore import QEvent, QRect, Qt
 from PyQt6.QtGui import QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QDialog,
     QHBoxLayout,
@@ -23,6 +24,8 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -72,45 +75,70 @@ def _listened(db, path: str) -> str:
 
 
 class ReviewDelegate(RatingDelegate):
-    # A song that is not rated shows five faint stars; a click on one of them
-    # gives that many stars, and a click anywhere else in the cell changes
-    # nothing (the player's cell rates zero stars on any click).
+    # A rating cell of the review: a "0" and five stars.  A click on the "0"
+    # rates zero stars, a click on a star gives that many, and a click
+    # anywhere else changes nothing; a double-click makes the song not rated.
+    # A song that is not rated shows the "0" and the stars faint; zero stars
+    # shows the "0" in full and the stars empty.
     def paint(self, painter, option, index) -> None:
-        super().paint(painter, option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(
+            QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget
+        )
         rating = index.data(RATING_ROLE)
-        if rating is not None and rating >= 0:
-            return
+        unrated = rating is None or rating < 0
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
         painter.save()
-        painter.setOpacity(0.35)
-        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
-        for i in range(5):
-            slot = QRect(
-                option.rect.left() + STAR_MARGIN + i * STAR_SLOT,
-                option.rect.top(),
-                STAR_SLOT,
-                option.rect.height(),
+        painter.setPen(
+            opt.palette.color(
+                QPalette.ColorRole.HighlightedText
+                if selected
+                else QPalette.ColorRole.Text
             )
-            painter.drawText(slot, Qt.AlignmentFlag.AlignCenter, "\u2606")
+        )
+        for i in range(6):  # slot 0 is the "0"
+            slot = QRect(
+                opt.rect.left() + STAR_MARGIN + i * STAR_SLOT,
+                opt.rect.top(),
+                STAR_SLOT,
+                opt.rect.height(),
+            )
+            if i == 0:
+                text = "0"
+                faint = unrated or rating != 0
+            else:
+                text = "\u2605" if not unrated and i <= rating else "\u2606"
+                faint = unrated
+            painter.setOpacity(0.35 if faint else 1.0)
+            painter.drawText(slot, Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()
 
     def editorEvent(self, event, model, option, index) -> bool:
-        rating = index.data(RATING_ROLE)
         if (
-            (rating is None or rating < 0)
-            and hasattr(event, "button")
-            and event.button() == Qt.MouseButton.LeftButton
-            and event.type()
-            in (
-                QEvent.Type.MouseButtonRelease,
-                QEvent.Type.MouseButtonDblClick,
-            )
+            not hasattr(event, "button")
+            or event.button() != Qt.MouseButton.LeftButton
         ):
-            if event.type() == QEvent.Type.MouseButtonRelease:
-                x = event.position().x() - option.rect.left() - STAR_MARGIN
-                if 0 <= x < 5 * STAR_SLOT:
-                    self.rate(index, int(x // STAR_SLOT) + 1)
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            self._after_double_click = False
+            return False
+        if kind == QEvent.Type.MouseButtonDblClick:
+            self._after_double_click = True
+            self.rate(index, None)
             return True
-        return super().editorEvent(event, model, option, index)
+        if kind == QEvent.Type.MouseButtonRelease:
+            if self._after_double_click:
+                self._after_double_click = False
+                return True
+            x = event.position().x() - option.rect.left() - STAR_MARGIN
+            if 0 <= x < 6 * STAR_SLOT:
+                self.rate(index, int(x // STAR_SLOT))
+            return True
+        return False
 
 
 class PhoneReview(QDialog):
@@ -197,7 +225,7 @@ class PhoneReview(QDialog):
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 260)
         self.table.setColumnWidth(
-            RATING_COLUMN, 2 * STAR_MARGIN + 5 * STAR_SLOT + 12
+            RATING_COLUMN, 2 * STAR_MARGIN + 6 * STAR_SLOT + 12
         )
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(
@@ -234,7 +262,7 @@ class PhoneReview(QDialog):
                 value = -1 if rating is None else rating
                 item.setData(RATING_ROLE, value)
                 item.setData(Qt.ItemDataRole.DisplayRole, value)
-                item.setToolTip("Click a star to rate")
+                item.setToolTip("Click the 0 or a star to rate")
             self.table.setItem(r, c, item)
 
     def _rate(self, index, rating) -> None:
