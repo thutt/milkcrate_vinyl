@@ -1,6 +1,9 @@
 Copyright (c) 2026 Logic Magicians Software
-Released under the GNU General Public License version 3; see the file
-LICENSE.
+SPDX-License-Identifier: GPL-3.0-only
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License version 3 as published
+by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+see the file LICENSE for the license text.
 
 DYNAMIC PLAYLISTS
 =================
@@ -138,6 +141,33 @@ are not played one after the other.  The first in the order of the choice
 stands for the song (with Prefer, the preferred format).  A list that
 already holds two of them keeps them until one is played.  "N matched"
 counts files, as before.
+
+The same artist is not put on a list twice in a row while another artist
+is left.  When a list is filled, regenerated or topped up (on the desktop
+and on the phone), each song chosen is the first in the order of the choice
+whose artist differs from the one before it; a top-up looks at the last
+song already on the list.  A song of the same artist is taken only when no
+song of another artist is left, as when the rules select the songs of one
+artist.  The artist is the first Artist tag, else the first Album artist,
+with capitals, punctuation and "The" ignored; a song with neither is not
+kept apart from its neighbours.  A list that is in the order of the artist
+or the album keeps that order.  Two things follow:
+
+  * A song may be chosen ahead of one that is higher in the order, such as a
+    better rated one, when the better rated song has the artist of the song
+    before it.  The skipped song is chosen later.
+  * With Prefer file types, a song of a later type may be chosen ahead of one
+    of an earlier type for the same reason.
+
+The entries already on a list are spaced in the same way.  When a song
+leaves the middle of a list (it no longer fits the rules, or the phone played
+it from the middle), its neighbours can have the same artist; the next
+refill, which the desktop makes when the editor or the player starts and
+after a sync, and the phone after a play, puts the entries in the order that
+separates them: each entry is the first in the list's order whose artist
+differs from the one before it.  On the phone this happens only for a list
+that is short of entries, and the songs that are played down from the front
+of a list are not moved.  "N matched" is not changed.
 
 A song that no longer fits the rules leaves the list.  When the editor
 or the player starts, and after every sync, each dynamic playlist drops
