@@ -29,6 +29,9 @@
     <!-- Sync with the desktop: a small server on the local network or the
          USB tethering link -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- The "Uninstall" button of the dialog shown on a phone whose Android
+         is too old -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <supports-screens android:anyDensity="true"
         android:largeScreens="true" android:normalScreens="true"
@@ -47,16 +50,23 @@
             android:label="Milkcrate Vinyl"
             android:launchMode="singleTop"
             android:screenOrientation="unspecified"
-            android:exported="true"
+            android:exported="false"
             android:windowSoftInputMode="adjustResize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
             <meta-data android:name="android.app.lib_name"
                 android:value="-- %%INSERT_APP_LIB_NAME%% --"/>
             <meta-data android:name="android.app.arguments"
                 android:value="-- %%INSERT_APP_ARGUMENTS%% --"/>
+        </activity>
+        <!-- What the launcher icon starts: it starts the player, or says
+             that this Android is too old (see LauncherActivity.java) -->
+        <activity android:name="org.musicplayer.player.LauncherActivity"
+            android:label="Milkcrate Vinyl"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
         </activity>
         <activity android:name="org.musicplayer.player.LockPlayerActivity"
             android:exported="false"

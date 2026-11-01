@@ -2456,8 +2456,10 @@ def main() -> int:
         )
         return 1
     # When the window stops responding, `kill -USR1 <pid>` prints on the
-    # terminal where each thread of the player is.
-    faulthandler.register(signal.SIGUSR1, all_threads=True)
+    # terminal where each thread of the player is.  Windows has no such
+    # signal, and its faulthandler has no register.
+    if hasattr(faulthandler, "register") and hasattr(signal, "SIGUSR1"):
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
     app = QApplication([sys.argv[0]] + qt_args)
     window = MainWindow(TagDb(path))
     window.show()

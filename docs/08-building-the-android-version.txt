@@ -9,8 +9,12 @@ BUILDING THE ANDROID VERSION
 ============================
 
 The phone app is a Qt 6.8 / QML program in android/ (C++17).  Package
-org.musicplayer.player, app name "Milkcrate Vinyl".  Minimum Android 8
-(API 26), target API 34.
+org.musicplayer.player, app name "Milkcrate Vinyl".  Target API 34.  The
+package installs on Android 8 (API 26) and later, but runs only on Android 13
+(API 33) and later.  On an older phone the app opens a dialog that gives the
+phone's Android version and the required one, with Ok (exits) and Uninstall
+(deletes tags.db, then uninstalls).  The check is LauncherActivity.java; the
+required level is REQUIRED_API there.
 
 Prerequisites
 -------------
