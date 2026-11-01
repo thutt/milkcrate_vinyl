@@ -437,9 +437,9 @@ class TagDb:
         rules = self.get_rules(playlist_id)
         if rules is None:
             return
-        chosen = dynamic_playlists.matches(self, rules, distinct=True)[
-            : self.dynamic_length()
-        ]
+        chosen = dynamic_playlists.matches(
+            self, rules, distinct=True, limit=self.dynamic_length()
+        )
         with self.con:
             self.con.execute(
                 "DELETE FROM playlist_item WHERE playlist_id = ?",
@@ -517,6 +517,7 @@ class TagDb:
                     pid, [e for e, _p in self.playlist_entries(pid)]
                 )  # close the gaps
             count = len(before) - len(stale)
+            self._respace(pid, rules)
             if count < self.dynamic_length():
                 self._refill(
                     pid, rules, set(json.loads(played_json)), songs
@@ -531,6 +532,21 @@ class TagDb:
                 changed.append(pid)
         return changed
 
+    def _respace(self, playlist_id: int, rules: dict) -> None:
+        # Put the entries in the order that keeps one artist from playing
+        # twice in a row (a removed entry can bring two of them together).
+        entries = self.playlist_entries(playlist_id)
+        paths = [p for _e, p in entries]
+        order = dynamic_playlists.respace(self, rules, paths)
+        if order == paths:
+            return
+        waiting: dict[str, list[int]] = {}
+        for e, p in entries:
+            waiting.setdefault(p, []).append(e)
+        self.set_playlist_order(
+            playlist_id, [waiting[p].pop(0) for p in order]
+        )
+
     def _refill(
         self, playlist_id: int, rules: dict, played: set[int], songs=None
     ) -> None:
@@ -542,8 +558,14 @@ class TagDb:
             self.path_of[f] for f in played if f in self.path_of
         }
         new = dynamic_playlists.matches(
-            self, rules, exclude, songs, distinct=True
-        )[: max(missing, 0)]
+            self,
+            rules,
+            exclude,
+            songs,
+            distinct=True,
+            limit=max(missing, 0),
+            before=entries[-1] if entries else None,
+        )
         with self.con:
             (end,) = self.con.execute(
                 "SELECT COALESCE(MAX(pos) + 1, 0) FROM playlist_item WHERE"

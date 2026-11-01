@@ -376,12 +376,60 @@ static QString songKey(const Track &t) {
     return songName(artist) + '\x01' + songName(title);
 }
 
+// The artist of a track as far as playing one artist twice in a row is
+// concerned: the first artist tag, else the first album artist, with the
+// spelling aside; empty when the track has neither.
+QString artistKey(const Track &t) {
+    for (const char *name : {"ARTIST", "ALBUMARTIST"})
+        for (const QString &v : t.tags.value(name))
+            if (!v.trimmed().isEmpty()) return songName(v);
+    return {};
+}
+
+// The ids as they stand, in the order that keeps one artist from playing twice
+// in a row where another artist can stand between (each the first in the order
+// whose artist differs from the one before it); unchanged when no two
+// neighbours share an artist.  byId finds a track; an id it does not know has
+// no artist.
+QVector<qint64> respaceIds(const QVector<qint64> &ids,
+                           const QHash<qint64, const Track *> &byId) {
+    auto key = [&](qint64 id) {
+        auto it = byId.constFind(id);
+        return it == byId.constEnd() ? QString() : artistKey(**it);
+    };
+    bool clash = false;
+    for (int i = 1; i < ids.size() && !clash; ++i) {
+        const QString a = key(ids[i]);
+        clash = !a.isEmpty() && a == key(ids[i - 1]);
+    }
+    if (!clash) return ids;
+    QVector<qint64> pool = ids, out;
+    QString previous;
+    while (!pool.isEmpty()) {
+        int at = 0;  // no other artist left: the first
+        for (int i = 0; i < pool.size(); ++i)
+            if (previous.isEmpty() || key(pool[i]) != previous) {
+                at = i;
+                break;
+            }
+        previous = key(pool[at]);
+        out.append(pool[at]);
+        pool.remove(at);
+    }
+    return out;
+}
+
 // distinct: no two of the chosen are the same song, and none is the song of a
 // track in exclude (the copy on a live album is not chosen next to the one on
 // the studio album); the first in the order of the choice stands for its song.
+// spread: each track chosen is the first in the order whose artist differs
+// from the one before it (the track with the id after, when there is one, comes
+// before the first), and only when no other artist is left is the first one
+// taken.  Lists in the order of the artist or the album keep their order.
 QVector<qint64> chooseFrom(QVector<Track> &tracks, const QJsonObject &rules,
                            const QSet<qint64> &exclude, int limit,
-                           bool distinct = false) {
+                           bool distinct = false, bool spread = false,
+                           qint64 after = -1) {
     const QDateTime now = QDateTime::currentDateTimeUtc();
     const bool filtered = !rules["rules"].toArray().isEmpty();
     const Test selects = filtered ? compileGroup(rules, now)
@@ -421,6 +469,43 @@ QVector<qint64> chooseFrom(QVector<Track> &tracks, const QJsonObject &rules,
             if (exclude.contains(t.id)) taken.insert(songKey(t));
     taken.remove(QString());
     QVector<qint64> ids;
+    if (spread && field != "artist" && field != "album") {
+        QString previous;
+        if (after >= 0)
+            for (const Track &t : tracks)
+                if (t.id == after) {
+                    previous = artistKey(t);
+                    break;
+                }
+        while (!chosen.isEmpty() && ids.size() < limit) {
+            int pick = -1, first = -1;
+            for (int i = 0; i < chosen.size(); ++i) {
+                if (distinct) {
+                    const QString key = songKey(*chosen[i]);
+                    if (!key.isEmpty() && taken.contains(key)) {
+                        chosen.remove(i--);  // the song is on the list already
+                        continue;
+                    }
+                }
+                if (first < 0) first = i;
+                if (previous.isEmpty() || artistKey(*chosen[i]) != previous) {
+                    pick = i;
+                    break;
+                }
+            }
+            if (first < 0) break;
+            if (pick < 0) pick = first;  // no other artist is left
+            const Track *t = chosen[pick];
+            chosen.remove(pick);
+            if (distinct) {
+                const QString key = songKey(*t);
+                if (!key.isEmpty()) taken.insert(key);
+            }
+            ids.append(t->id);
+            previous = artistKey(*t);
+        }
+        return ids;
+    }
     for (const Track *t : chosen) {
         if (ids.size() >= limit) break;
         if (distinct) {
@@ -449,7 +534,7 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
     collectFields(rules, fields);
     fields.insert(rules["sort"].toObject()["field"].toString());
     QVector<Track> tracks = loadTracks(c.db(), fields);
-    return chooseFrom(tracks, rules, exclude, limit, true);
+    return chooseFrom(tracks, rules, exclude, limit, true, true);
 }
 
 // How a dynamic playlist's rules see some of the tracks: the values they test,
@@ -648,6 +733,10 @@ struct Pending {
     QSet<qint64> exclude;
     int missing;
     qint64 end;
+    qint64 last = -1;  // the file at the end of the visible entries
+    bool marks = false;  // the entries have removed_at
+    QVector<qint64> visible, positions;  // the visible entries, in order
+    QVector<qint64> reordered;  // visible in the order that spaces the artists
     QVector<qint64> chosen;
 };
 
@@ -678,17 +767,28 @@ QVector<Pending> shortLists(QSqlDatabase db) {
         QSqlQuery items(db);
         items.prepare("SELECT file_id, pos" +
                       QString(marks ? ", removed_at IS NULL" : ", 1") +
-                      " FROM playlist_item WHERE playlist_id = ?");
+                      " FROM playlist_item WHERE playlist_id = ? ORDER BY "
+                      "pos");
+        p.marks = marks;
         items.addBindValue(p.id);
         items.exec();
         int visible = 0;
+        qint64 lastPos = -1;
         p.end = 0;
         while (items.next()) {
             p.exclude.insert(
                 items.value(0).toLongLong());  // on the list, played or not:
                                                // not chosen again
             p.end = qMax<qint64>(p.end, items.value(1).toLongLong() + 1);
-            if (items.value(2).toInt()) ++visible;
+            if (items.value(2).toInt()) {
+                ++visible;
+                p.visible.append(items.value(0).toLongLong());
+                p.positions.append(items.value(1).toLongLong());
+                if (items.value(1).toLongLong() >= lastPos) {
+                    lastPos = items.value(1).toLongLong();
+                    p.last = items.value(0).toLongLong();
+                }
+            }
         }
         p.missing = length - visible;
         if (p.missing > 0 && !p.rules.isEmpty()) pending.append(p);
@@ -718,9 +818,19 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
             QSet<QString> fields;
             for (const Pending &p : pending) collectFields(p.rules, fields);
             QVector<Track> tracks = loadTracks(c.db(), fields);
-            for (Pending &p : pending)
+            QHash<qint64, const Track *> byId;
+            for (const Track &t : tracks) byId.insert(t.id, &t);
+            for (Pending &p : pending) {
+                // a removed entry can bring two songs of one artist together
+                const QString sort =
+                    p.rules["sort"].toObject()["field"].toString("random");
+                if (sort != "artist" && sort != "album") {
+                    p.reordered = respaceIds(p.visible, byId);
+                    if (!p.reordered.isEmpty()) p.last = p.reordered.last();
+                }
                 p.chosen = chooseFrom(tracks, p.rules, p.exclude, p.missing,
-                                      true);
+                                      true, true, p.last);
+            }
         }
         QMutexLocker lock(&dbLock());
         if (generation != dbGeneration()) continue;  // choose again
@@ -744,6 +854,27 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
             QSqlQuery insert(db);
             insert.prepare("INSERT INTO playlist_item (playlist_id, pos, "
                            "file_id) VALUES (?, ?, ?)");
+            bool moved = false;
+            if (!p.reordered.isEmpty() && p.reordered != p.visible) {
+                QSqlQuery move(db);
+                move.prepare(
+                    QString("UPDATE playlist_item SET pos = ? WHERE "
+                            "playlist_id = ? AND file_id = ?") +
+                    (p.marks ? " AND removed_at IS NULL" : ""));
+                for (int i = 0; i < p.reordered.size(); ++i) {
+                    move.addBindValue(p.positions[i]);
+                    move.addBindValue(p.id);
+                    move.addBindValue(p.reordered[i]);
+                    if (!move.exec()) {
+                        if (problem)
+                            *problem = "Cannot refill the dynamic playlists: " +
+                                       move.lastError().text();
+                        db.rollback();
+                        return 0;
+                    }
+                }
+                moved = true;
+            }
             qint64 pos = p.end;
             for (qint64 id : p.chosen) {
                 insert.addBindValue(p.id);
@@ -757,7 +888,7 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
                     return 0;
                 }
             }
-            if (!p.chosen.isEmpty()) ++changed;
+            if (moved || !p.chosen.isEmpty()) ++changed;
         }
         if (!db.commit()) {
             if (problem)

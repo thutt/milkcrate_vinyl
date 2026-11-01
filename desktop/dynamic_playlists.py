@@ -375,14 +375,69 @@ def _compile(db, group: dict, now: datetime, songs=None):
     return lambda p: combine(part(p) for part in parts)
 
 
+def _artist_key(db, path: str) -> str:
+    # The artist as far as playing one artist twice in a row is concerned: the
+    # first artist tag, else the first album artist, spelling aside; empty when
+    # the file has neither.
+    tags = db.tags[path]
+    for name in ("ARTIST", "ALBUMARTIST"):
+        for value in tags.get(name, []):
+            if value.strip():
+                return _spelling(value)
+    return ""
+
+
+def _spread(db, chosen: list[str], limit: int, before: str | None):
+    # At most limit of the files, each the first in the order whose artist
+    # differs from the one before it (before: the file the list ends with, or
+    # None); only when no other artist is left is the first one taken.
+    pool, out = list(chosen), []
+    previous = _artist_key(db, before) if before else ""
+    while pool and len(out) < limit:
+        at = next(
+            (
+                i
+                for i, p in enumerate(pool)
+                if not previous or _artist_key(db, p) != previous
+            ),
+            0,
+        )
+        path = pool.pop(at)
+        out.append(path)
+        previous = _artist_key(db, path)
+    return out
+
+
+def respace(db, rules: dict, paths: list[str]) -> list[str]:
+    # The files of a list as they stand, in the order that keeps the same
+    # artist from playing twice in a row where another artist can stand
+    # between; unchanged when no two neighbours share an artist, or when the
+    # rules order the list by artist or album.
+    if rules.get("sort", {}).get("field") in ("artist", "album"):
+        return paths
+    keys = [_artist_key(db, p) for p in paths]
+    if not any(a and a == b for a, b in zip(keys, keys[1:])):
+        return paths
+    return _spread(db, paths, len(paths), None)
+
+
 def matches(
-    db, rules: dict, exclude=frozenset(), songs=None, distinct=False
+    db,
+    rules: dict,
+    exclude=frozenset(),
+    songs=None,
+    distinct=False,
+    limit=None,
+    before=None,
 ) -> list[str]:
     # Every library file the rules select (never a duplicate, never one of
     # exclude), sorted as the rules say
     # (random for "random").  With distinct, no two are the same song and none
     # is the song of a file in exclude, the first in order standing for its
     # song; for choosing what goes into a list, not for what fits its rules.
+    # With limit, at most that many, the same artist not twice in a row while
+    # another is left (before: the file the list already ends with); a list in
+    # the order of the artist or the album keeps its order.
     error = validate(rules)
     if error:
         raise ValueError(error)
@@ -419,6 +474,11 @@ def matches(
             taken.add(key)
             keep.append(p)
         chosen = keep
+    if limit is not None:
+        if sort["field"] in ("artist", "album"):
+            chosen = chosen[:limit]
+        else:
+            chosen = _spread(db, chosen, limit, before)
     return chosen
 
 

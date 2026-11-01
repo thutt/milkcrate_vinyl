@@ -152,6 +152,55 @@ ApplicationWindow {
         }
     }
 
+    // Full screen: four corner brackets, an outline like the shuffle button's
+    // when it is off; it opens the full-screen player.
+    component FullScreenButton: Item {
+        id: fs
+        signal clicked()
+        implicitWidth: 76; implicitHeight: 68
+        Rectangle {
+            id: fsDisc
+            width: 44; height: 44; radius: 22
+            anchors.horizontalCenter: parent.horizontalCenter
+            color: "transparent"
+            border.width: 1.5
+            border.color: window.foregroundAlpha(0.45)
+            Canvas {
+                id: fsGlyph
+                width: 24; height: 24
+                anchors.centerIn: parent
+                property color ink: window.foregroundAlpha(0.75)
+                onInkChanged: requestPaint()
+                onPaint: {
+                    var c = getContext("2d");
+                    c.reset();
+                    c.strokeStyle = ink;
+                    c.lineWidth = 2.2;
+                    c.lineCap = "round";
+                    c.lineJoin = "round";
+                    c.beginPath();
+                    c.moveTo(2.5, 9); c.lineTo(2.5, 2.5); c.lineTo(9, 2.5);
+                    c.moveTo(15, 2.5); c.lineTo(21.5, 2.5); c.lineTo(21.5, 9);
+                    c.moveTo(21.5, 15); c.lineTo(21.5, 21.5);
+                    c.lineTo(15, 21.5);
+                    c.moveTo(9, 21.5); c.lineTo(2.5, 21.5); c.lineTo(2.5, 15);
+                    c.stroke();
+                }
+            }
+        }
+        Label {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: fsDisc.bottom; anchors.topMargin: 3
+            text: "full screen"
+            font.pixelSize: 11
+            color: window.foregroundAlpha(0.6)
+        }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: fs.clicked()
+        }
+    }
+
     component Stars: Row {
         spacing: 2
         Label {
@@ -986,7 +1035,7 @@ ApplicationWindow {
                     }
                     // as wide as the shuffle button, so the play button stays
                     // centred
-                    Item { implicitWidth: 76 }
+                    FullScreenButton { onClicked: player.showFullScreen() }
                     Item { Layout.fillWidth: true }
                 }
             }
@@ -1267,8 +1316,12 @@ ApplicationWindow {
             }
         }
         MenuItem {
-            text: "Announce songs..."; font.pixelSize: 18; height: 52
-            onTriggered: announceDialog.open()
+            id: awakeItem
+            text: "Keep screen on in full screen"
+            font.pixelSize: 18; height: 52
+            checkable: true
+            checked: player.fullScreenAwake()
+            onTriggered: player.setFullScreenAwake(checked)
         }
         MenuItem {
             text: "Equalizer..."; font.pixelSize: 18; height: 52
@@ -1370,50 +1423,6 @@ ApplicationWindow {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    // the phone's voice says the name of each song that starts
-    PopupDialog {
-        id: announceDialog
-        title: "Announce songs"
-        standardButtons: Dialog.Close
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
-            Label { text: "How" }
-            ComboBox {
-                Layout.fillWidth: true
-                model: ["Off", "Over the start of the song",
-                        "Before the song starts",
-                        "Over the start, after a skip only"]
-                currentIndex: player.announceMode
-                onActivated: player.announceMode = currentIndex
-            }
-            Label { text: "What is said" }
-            ComboBox {
-                Layout.fillWidth: true
-                enabled: player.announceMode > 0
-                model: ["The title", "The title and the artist",
-                        "The title, the artist and the album"]
-                currentIndex: player.announceWhat
-                onActivated: player.announceWhat = currentIndex
-            }
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                opacity: 0.7
-                text: player.announceMode === 1
-                      ? "The music is quieter while the name is said."
-                      : player.announceMode === 2
-                        ? "The song starts when the name has been said."
-                        : player.announceMode === 3
-                          ? "As the first, but only for a song that you " +
-                            "chose or skipped to, not one that follows " +
-                            "the last by itself."
-                          : "The voice and the language are those of the " +
-                          "phone's text-to-speech settings."
             }
         }
     }

@@ -9,26 +9,37 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 
 
 def adb_program() -> str:
-    # adb comes from the tools in the build output directory (BOD).
+    # adb is, in this order: the program named by MILKCRATEVINYL_ADB (the
+    # Windows package sets it), the one in the tools of the build output
+    # directory (BOD), the one on the PATH.
+    named = os.environ.get("MILKCRATEVINYL_ADB")
+    if named:
+        if not os.path.exists(named):
+            raise RuntimeError(
+                f"MILKCRATEVINYL_ADB is set to {named}, which is missing"
+            )
+        return named
     bod = os.environ.get("MILKCRATEVINYL_BOD")
-    if not bod:
-        raise RuntimeError(
-            "MILKCRATEVINYL_BOD is not set, so adb cannot be found: "
-            "source scripts/setup --venv DIR --bod DIR --database FILE"
+    if bod:
+        program = os.path.join(
+            bod, "android-dev", "android-sdk", "platform-tools",
+            "adb.exe" if os.name == "nt" else "adb",
         )
-    program = os.path.join(
-        bod, "android-dev", "android-sdk", "platform-tools", "adb"
+        if os.path.exists(program):
+            return program
+    found = shutil.which("adb")
+    if found:
+        return found
+    raise RuntimeError(
+        "adb cannot be found: set MILKCRATEVINYL_ADB to the program, put adb "
+        "on the PATH, or set MILKCRATEVINYL_BOD and run "
+        "scripts/setup-android-tools"
     )
-    if not os.path.exists(program):
-        raise RuntimeError(
-            f"adb is not installed: {program} is missing; "
-            "run scripts/setup-android-tools"
-        )
-    return program
 
 
 def adb(*args: str, check: bool = True) -> str:

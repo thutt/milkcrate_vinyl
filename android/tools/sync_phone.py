@@ -59,6 +59,25 @@ LINK_FILE = ""  # phone-link.json, in the same folder
 
 
 def desktop_programs_running() -> list[str]:
+    if os.name == "nt":
+        # PowerShell lists the processes whose command line names a program
+        script = (
+            "Get-CimInstance Win32_Process | Where-Object { "
+            "$_.CommandLine -match 'tagdb_editor\\.py|player\\.py' } | "
+            "ForEach-Object { [string]$_.ProcessId + ' ' + $_.CommandLine }"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+        )
+        return [
+            line
+            for line in r.stdout.splitlines()
+            if line.strip()
+            and "sync_phone" not in line
+            and "Get-CimInstance" not in line
+        ]
     r = subprocess.run(
         ["pgrep", "-af", r"tagdb_editor\.py|player\.py"],
         capture_output=True,

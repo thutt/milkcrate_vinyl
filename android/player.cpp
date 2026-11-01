@@ -49,14 +49,6 @@ static void nativeCommand(JNIEnv *, jclass, jint what, jlong argument) {
             Qt::QueuedConnection);
 }
 
-// Announcer.finished(id): the voice that says the name of a song has ended.
-static void nativeAnnounced(JNIEnv *, jclass, jlong id) {
-    if (g_engine)
-        QMetaObject::invokeMethod(
-            g_engine, [id] { g_engine->announceDone(quint64(id)); },
-            Qt::QueuedConnection);
-}
-
 // LockPlayerActivity.log(line): a line from the Java side for the log file.
 static void nativeLog(JNIEnv *env, jclass, jstring line) {
     const char *text = env->GetStringUTFChars(line, nullptr);
@@ -125,8 +117,6 @@ Player::Player(QObject *parent)
     m_volume = m_settings.value("volume", 1.0).toDouble();
     m_target = m_settings.value("target", -10.0).toDouble();
     m_leveling = m_settings.value("leveling", true).toBool();
-    m_announceMode = m_settings.value("announceMode", 0).toInt();
-    m_announceWhat = m_settings.value("announceWhat", 1).toInt();
     m_eqOn = m_settings.value("eqOn", false).toBool();
     m_eqAuto = m_settings.value("eqAuto", false).toBool();
     QStringList saved = m_settings.value("eqGains").toStringList();
@@ -224,7 +214,6 @@ Player::Player(QObject *parent)
     onEngine([e = m_engine] { e->init(); });
     pushVolume();
     pushEq();
-    pushAnnounce();
     onEngine([e = m_engine, s = m_shuffle] { e->setShuffle(s); });
 #ifdef Q_OS_ANDROID
     g_engine = m_engine;
@@ -232,9 +221,6 @@ Player::Player(QObject *parent)
     env.registerNativeMethods(
         "org/musicplayer/player/PlaybackService",
         {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)}});
-    env.registerNativeMethods(
-        "org/musicplayer/player/Announcer",
-        {{"finished", "(J)V", reinterpret_cast<void *>(nativeAnnounced)}});
     if (!env.registerNativeMethods(
             "org/musicplayer/player/LockPlayerActivity",
             {{"spectrum", "()[F", reinterpret_cast<void *>(nativeSpectrum)},
@@ -554,6 +540,38 @@ void Player::lockPlayerSettings() {
 #endif
 }
 
+void Player::showFullScreen() {
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/LockPlayerActivity", "open",
+        "(Landroid/content/Context;)V",
+        QNativeInterface::QAndroidApplication::context().object());
+#endif
+}
+
+bool Player::fullScreenAwake() const {
+#ifdef Q_OS_ANDROID
+    return QJniObject::callStaticMethod<jboolean>(
+        "org/musicplayer/player/LockPlayerActivity", "isKeepAwake",
+        "(Landroid/content/Context;)Z",
+        QNativeInterface::QAndroidApplication::context().object());
+#else
+    return false;
+#endif
+}
+
+void Player::setFullScreenAwake(bool on) {
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/LockPlayerActivity", "setKeepAwake",
+        "(Landroid/content/Context;Z)V",
+        QNativeInterface::QAndroidApplication::context().object(),
+        jboolean(on));
+#else
+    Q_UNUSED(on)
+#endif
+}
+
 void Player::setLockPlayerOn(bool on) {
 #ifdef Q_OS_ANDROID
     QJniObject::callStaticMethod<void>(
@@ -797,24 +815,6 @@ void Player::setLeveling(bool on) {
     m_settings.setValue("leveling", on);
     pushVolume();
     emit volumeChanged();
-}
-
-void Player::pushAnnounce() {
-    onEngine([e = m_engine, m = m_announceMode, w = m_announceWhat] {
-        e->setAnnounce(m, w);
-    });
-}
-void Player::setAnnounceMode(int mode) {
-    m_announceMode = std::clamp(mode, 0, 3);
-    m_settings.setValue("announceMode", m_announceMode);
-    pushAnnounce();
-    emit announceChanged();
-}
-void Player::setAnnounceWhat(int what) {
-    m_announceWhat = std::clamp(what, 0, 2);
-    m_settings.setValue("announceWhat", m_announceWhat);
-    pushAnnounce();
-    emit announceChanged();
 }
 
 // -- equalizer --

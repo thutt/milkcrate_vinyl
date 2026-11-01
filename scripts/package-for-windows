@@ -8,76 +8,72 @@
 #
 # Runs under bash or zsh.  Paths are found from the location of this script.
 #
-# Builds the phone's program (scripts/build-for-android) and packs it with the
-# desktop programs, the Windows scripts (windows/*.bat) and the documents into
-# ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-VERSION-windows.zip, which Windows
-# unzips (see windows/README.txt).  With --no-build the program already built
-# in the BOD is used.  The scripts and the README get Windows line ends.
+# Packages the desktop programs, the Windows scripts and the phone's APK as a
+# zip file that is unzipped and used on Windows:
+#
+#     scripts/package-for-windows [--no-build]
+#
+# The APK is built first with scripts/build-for-android, unless --no-build is
+# given (the APK already in the BOD is used).  The archive is
+# ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-VERSION-windows.zip, where VERSION is
+# the output of git describe.  Its top folder holds 00-READ-ME-FIRST.txt (the
+# Windows README, named so that it sorts before everything else), the APK,
+# scripts/ with the .bat files, desktop/, android/tools/, docs/, LICENSE and
+# README.md.  The .bat, .txt and .md files are given Windows line ends; the
+# Python files keep theirs.
 set -o errexit
 set -o nounset
 set -o pipefail
 here=$(cd "$(dirname "${0}")" && pwd)
 root=$(dirname "${here}")
-# no .pyc files, also in anything Python starts
-export PYTHONDONTWRITEBYTECODE=1
 . "${here}/require-venv"
 music_require_bod
 
 build=1
-if [ "${#}" -gt 0 ]; then
-    if [ "${1}" = "--no-build" ] && [ "${#}" -eq 1 ]; then
-        build=0
-    else
-        echo "usage: package-for-windows [--no-build]" >&2
-        exit 1
-    fi
-fi
+case "${1:-}" in
+    "") ;;
+    --no-build) build=0 ;;
+    *) echo "usage: package-for-windows [--no-build]" >&2; exit 2 ;;
+esac
 
-if [ "${build}" -eq 1 ]; then
-    "${here}/build-for-android"
+bod=$(realpath -m -- "${MILKCRATEVINYL_BOD}")
+apk="${bod}/milkcrate-vinyl-arm64_v8a.apk"
+if [ "${build}" = 1 ]; then
+    "${here}/build-for-android" arm64_v8a
 fi
-apk="${MILKCRATEVINYL_BOD}/milkcrate-vinyl-arm64_v8a.apk"
 if [ ! -f "${apk}" ]; then
-    echo "error: ${apk} is missing; build it first." >&2
+    echo "error: ${apk} is missing; run without --no-build" >&2
     exit 1
 fi
-version=$(git -C "${root}" describe --always --dirty)
-zip_file="${MILKCRATEVINYL_BOD}/milkcrate-vinyl-${version}-windows.zip"
 
-python3 -I -B - "${root}" "${apk}" "${zip_file}" "milkcrate-vinyl-${version}" \
-    <<'PY'
-import os
-import sys
-import zipfile
+version=$(cd "${root}" && git describe --always --dirty)
+name="milkcrate-vinyl-${version}"
+stage=$(mktemp -d "${bod}/package.XXXXXX")
+trap 'rm -rf "${stage}"' EXIT
+top="${stage}/${name}"
+mkdir -p "${top}/scripts" "${top}/desktop" "${top}/android/tools" \
+      "${top}/docs"
 
-root, apk, zip_file, top = sys.argv[1:5]
-CRLF = (".bat", ".txt", ".md")  # text that Windows editors expect so
+# a file with Windows line ends: LF becomes CRLF, a CRLF is kept
+crlf() {
+    sed 's/\r$//; s/$/\r/' "${1}" > "${2}"
+}
 
+cp "${apk}" "${top}/"
+cp "${root}/LICENSE" "${top}/"
+cp "${root}"/desktop/*.py "${root}/desktop/requirements.txt" "${top}/desktop/"
+cp "${root}"/android/tools/*.py "${top}/android/tools/"
+for f in "${root}"/docs/*.txt; do
+    crlf "${f}" "${top}/docs/$(basename "${f}")"
+done
+crlf "${root}/README.md" "${top}/README.md"
+crlf "${root}/windows/README.txt" "${top}/00-READ-ME-FIRST.txt"
+for f in "${root}"/windows/*.bat; do
+    crlf "${f}" "${top}/scripts/$(basename "${f}")"
+done
 
-def entries():
-    yield os.path.join(root, "LICENSE"), "LICENSE"
-    yield os.path.join(root, "README.md"), "README.md"
-    yield os.path.join(root, "windows", "README.txt"), "README-WINDOWS.txt"
-    yield apk, os.path.basename(apk)
-    for folder, target, suffixes in (
-        ("desktop", "desktop", (".py", ".txt")),
-        ("android/tools", "android/tools", (".py",)),
-        ("docs", "docs", (".txt",)),
-        ("windows", "scripts", (".bat",)),
-    ):
-        base = os.path.join(root, folder)
-        for name in sorted(os.listdir(base)):
-            if name.endswith(suffixes):
-                yield os.path.join(base, name), f"{target}/{name}"
-
-
-count = 0
-with zipfile.ZipFile(zip_file, "w", zipfile.ZIP_DEFLATED) as z:
-    for source, name in entries():
-        data = open(source, "rb").read()
-        if name.endswith(CRLF) and b"\r\n" not in data:
-            data = data.replace(b"\n", b"\r\n")
-        z.writestr(f"{top}/{name}", data)
-        count += 1
-print(f"{count} files in {zip_file}")
-PY
+out="${bod}/${name}-windows.zip"
+rm -f "${out}"
+(cd "${stage}" && zip -q -r -X "${out}" "${name}")
+echo "package: ${out}"
+unzip -Z1 "${out}" | wc -l | sed 's/$/ files/'

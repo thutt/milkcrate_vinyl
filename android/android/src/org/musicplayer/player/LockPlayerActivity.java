@@ -7,6 +7,7 @@
 package org.musicplayer.player;
 
 import android.app.Activity;
+import android.app.KeyguardManager;
 import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -33,6 +34,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.OrientationEventListener;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -43,7 +45,10 @@ import android.widget.TextView;
 
 // The song that is playing, full screen, over the lock screen: it opens when
 // the screen is turned on while music plays (see PlaybackService), and goes
-// away when the phone is unlocked or the screen turns off.
+// away when the phone is unlocked or the screen turns off.  It can also be
+// opened from the player's own screen while the phone is unlocked (open); it
+// then stays over the app until the screen is tapped where there is no
+// control, and it keeps the screen on only when the menu says so.
 public class LockPlayerActivity extends Activity {
     // what the service last reported; replaced as a whole
     static final class State {
@@ -82,6 +87,8 @@ public class LockPlayerActivity extends Activity {
     private EqView eq;
     private Pill bypass, auto;
     private boolean dragging = false, reported = false;
+    // opened from the app, with the phone unlocked
+    private boolean fromApp = false;
     // a swipe anywhere but on the seek bar closes the view and shows the lock
     // screen again
     private GestureDetector swipe;
@@ -180,6 +187,46 @@ public class LockPlayerActivity extends Activity {
         return enabled(context);
     }
 
+    static boolean keepAwake(Context context) {
+        return context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+            .getBoolean("awake", false);
+    }
+
+    public static boolean isKeepAwake(Context context) {
+        return keepAwake(context);
+    }
+
+    // takes effect the next time the view is opened
+    public static void setKeepAwake(Context context, boolean on) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+            .edit().putBoolean("awake", on).apply();
+    }
+
+    // the full-screen view from the player's own screen
+    public static void open(Context context) {
+        context.startActivity(new Intent(context, LockPlayerActivity.class)
+                                  .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    }
+
+    // whether the point (screen coordinates) is on a control: a button, the
+    // seek bar, the stars or the equalizer
+    private static boolean onControl(View view, float x, float y) {
+        int[] at = new int[2];
+        view.getLocationOnScreen(at);
+        if (x < at[0] || y < at[1] || x >= at[0] + view.getWidth() ||
+            y >= at[1] + view.getHeight())
+            return false;
+        if (view instanceof SeekBar || view instanceof StarView ||
+            view instanceof EqView || view.isClickable())
+            return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); ++i)
+                if (onControl(group.getChildAt(i), x, y)) return true;
+        }
+        return false;
+    }
+
     static void changed() {
         final LockPlayerActivity activity = shown;
         if (activity != null) activity.handler.post(activity::draw);
@@ -215,9 +262,14 @@ public class LockPlayerActivity extends Activity {
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
-        setShowWhenLocked(true);
-        setTurnScreenOn(true);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        fromApp = !getSystemService(KeyguardManager.class).isKeyguardLocked();
+        // the manifest allows both; an unlocked phone's screen is already on
+        // and must not show this view over the lock screen later
+        setShowWhenLocked(!fromApp);
+        setTurnScreenOn(!fromApp);
+        if (!fromApp || keepAwake(this))
+            getWindow().addFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         int white = Color.WHITE, grey = Color.argb(180, 255, 255, 255);
 
         LinearLayout page = new LinearLayout(this);
@@ -366,6 +418,17 @@ public class LockPlayerActivity extends Activity {
                     float far = dp(80);
                     if (Math.abs(to.getX() - from.getX()) < far &&
                         Math.abs(to.getY() - from.getY()) < far)
+                        return false;
+                    finish();
+                    return true;
+                }
+
+                // opened from the app: a tap away from the controls leaves
+                @Override
+                public boolean onSingleTapUp(MotionEvent tap) {
+                    if (!fromApp || dragging || eq.touching ||
+                        onControl(getWindow().getDecorView(),
+                                  tap.getRawX(), tap.getRawY()))
                         return false;
                     finish();
                     return true;

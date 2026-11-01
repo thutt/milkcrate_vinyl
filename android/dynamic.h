@@ -19,7 +19,9 @@
 #include <QVector>
 
 // The tracks the rules select (never a duplicate, never one of exclude), in
-// order, at most limit of them.
+// order, at most limit of them; the same artist is not chosen twice in a row
+// while another is left (not for a list in the order of the artist or the
+// album).
 QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
                              const QSet<qint64> &exclude, int limit,
                              QString *error = nullptr);
@@ -27,8 +29,9 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
 // Top up every dynamic playlist that has fewer visible entries than the
 // configured length (meta dynamic_length, 20 by default): new tracks go at the
 // end; entries already on the list (marked played or not) and the playlist's
-// "played" set are never chosen.  Returns how many playlists changed; takes
-// dbLock() itself.
+// "played" set are never chosen; the first new track is of another artist than
+// the last one on the list when there is one.  Returns how many playlists
+// changed; takes dbLock() itself.
 int topUpDynamicPlaylists(const QString &dbPath, QString *problem = nullptr);
 
 // How many library tracks (duplicates excluded) the rules of a dynamic playlist

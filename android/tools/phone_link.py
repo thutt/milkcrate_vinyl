@@ -40,10 +40,32 @@ class Conflict(LinkError):
     pass
 
 
+def _windows_routes() -> list[list[str]]:
+    # The rows of the IPv4 route table of Windows, as lists of words:
+    # destination, netmask, gateway, interface, metric.
+    try:
+        out = subprocess.run(
+            ["route", "print", "-4"], capture_output=True, text=True
+        ).stdout
+    except OSError:
+        return []
+    rows = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0][0].isdigit() and parts[1][0].isdigit():
+            rows.append(parts)
+    return rows
+
+
 def candidate_hosts() -> list[str]:
     # Addresses worth trying: the gateways of the network links (with USB
     # tethering the phone is the gateway).
     hosts: list[str] = []
+    if os.name == "nt":
+        for parts in _windows_routes():
+            if parts[0] == "0.0.0.0" and parts[2][0].isdigit():
+                hosts.append(parts[2])
+        return list(dict.fromkeys(hosts))
     out = subprocess.run(
         ["ip", "-4", "route", "show"], capture_output=True, text=True
     ).stdout
@@ -192,6 +214,22 @@ class Link:
 
 
 def broadcast_addresses() -> list[str]:
+    if os.name == "nt":
+        # the broadcast address of each directly connected network
+        import ipaddress
+
+        found = ["255.255.255.255"]
+        for parts in _windows_routes():
+            if parts[2] != "On-link" or parts[1] in (
+                "0.0.0.0", "255.255.255.255", "240.0.0.0"
+            ) or parts[0].startswith(("127.", "224.")):
+                continue
+            try:
+                net = ipaddress.ip_network(f"{parts[0]}/{parts[1]}")
+            except ValueError:
+                continue
+            found.append(str(net.broadcast_address))
+        return list(dict.fromkeys(found))
     out = subprocess.run(
         ["ip", "-4", "-o", "addr"], capture_output=True, text=True
     ).stdout
