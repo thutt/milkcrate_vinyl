@@ -61,7 +61,8 @@ ApplicationWindow {
     property bool entriesOpen: false
     property string sortKey: "artist"
     readonly property var sortNames: ({
-        artist: "Artist", title: "Title", album: "Album", path: "Folder"
+        artist: "Artist", title: "Title", album: "Album", genre: "Genre",
+        path: "Folder"
     })
 
     function clock(ms) {
@@ -518,7 +519,7 @@ ApplicationWindow {
                 Menu {
                     id: sortMenu
                     Repeater {
-                        model: ["artist", "title", "album", "path"]
+                        model: ["artist", "title", "album", "genre", "path"]
                         MenuItem {
                             text: "Sort by " +
                                   sortNames[modelData].toLowerCase()
@@ -527,6 +528,11 @@ ApplicationWindow {
                                 player.sortBy(modelData)
                             }
                         }
+                    }
+                    MenuSeparator {}
+                    MenuItem {
+                        text: "Pick a genre..."
+                        onTriggered: genreDialog.open()
                     }
                 }
             }
@@ -1424,6 +1430,32 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+
+    // the songs of one genre: choosing a genre enters its name in the search
+    // box, and a search text that is a genre shows that genre's songs
+    PopupDialog {
+        id: genreDialog
+        title: "Genre"
+        standardButtons: Dialog.Close
+        property var names: []
+        onAboutToShow: names = player.genres()
+        ListView {
+            anchors.fill: parent
+            implicitHeight: Overlay.overlay.height * 0.55
+            clip: true
+            model: genreDialog.names
+            delegate: ItemDelegate {
+                width: ListView.view.width
+                text: modelData.name + "  (" + modelData.count + ")"
+                onClicked: {
+                    searchField.text = modelData.name
+                    player.search(modelData.name)
+                    genreDialog.close()
+                }
+            }
+            ScrollIndicator.vertical: ScrollIndicator {}
         }
     }
 

@@ -14,6 +14,7 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 #include <QVector>
 
 #include "dynamic.h"
@@ -24,6 +25,7 @@ struct Track {
     QString title, artist, album,
         genre;       // genre: all of the track's genres, for the search only
     QStringList genres;  // the same, one by one, for the automatic equalizer
+    QStringList keyGenres;  // searchKey of each genre, for "all of a genre"
     int number = 0;  // track number, 0 = none
     double loudness = 0;  // LUFS
     bool measured = false;
@@ -31,7 +33,7 @@ struct Track {
     QString key;  // search text: lower case words separated by single spaces
     QString keyTitle, keyArtist, keyAlbum, keyGenre,
         keyPath;  // the same for one field, for "genre:rock"
-    QString sortArtist, sortTitle, sortAlbum;
+    QString sortArtist, sortTitle, sortAlbum, sortGenre;
 };
 
 // What the player needs to play a track (a copy, so the playback thread never
@@ -83,12 +85,16 @@ public:
     QVector<QueueItem> viewItems() const;  // the list as shown, for a queue
 
     void setQuery(const QString &text);
+    // every genre of the library with its number of songs, by name, as
+    // {name, count}; for the genre picker
+    QVariantList genreList() const;
     void setRating(qint64 id, int rating);  // a row shows it at once
     // the plays and last play of every song, by file id; a row shows them
     // when the list asks for its text, so only the rows on screen cost time
     void setStats(const QHash<qint64, SongStat> &stats);
     QHash<qint64, SongStat> stats() const { return m_stats; }
-    void setSort(const QString &key);  // "artist", "title", "album" or "path"
+    // "artist", "title", "album", "genre" or "path"
+    void setSort(const QString &key);
 signals:
     void countChanged();
 
@@ -109,6 +115,11 @@ private:
     QHash<qint64, int> m_index;  // id -> position in m_all
     QVector<int> m_view;         // positions in m_all that are shown, in order
     QVector<Term> m_terms;
+    // the whole search text as one searchKey: when it is a genre of the
+    // library the list shows the songs of that genre and nothing else
+    QString m_queryKey;
+    QHash<QString, QString> m_genreNames;  // searchKey -> name as tagged
+    QHash<QString, int> m_genreCounts;     // searchKey -> number of songs
     QString m_sort = "artist";
     QHash<qint64, SongStat> m_stats;
 };

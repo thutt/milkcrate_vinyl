@@ -49,7 +49,8 @@ static void nativeCommand(JNIEnv *, jclass, jint what, jlong argument) {
             Qt::QueuedConnection);
 }
 
-// LockPlayerActivity.log(line): a line from the Java side for the log file.
+// LockPlayerActivity.log(line) and PlaybackService.log(line): a line from
+// the Java side for the log file.
 static void nativeLog(JNIEnv *env, jclass, jstring line) {
     const char *text = env->GetStringUTFChars(line, nullptr);
     qInfo("%s", text);
@@ -220,7 +221,9 @@ Player::Player(QObject *parent)
     QJniEnvironment env;
     env.registerNativeMethods(
         "org/musicplayer/player/PlaybackService",
-        {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)}});
+        {{"command", "(IJ)V", reinterpret_cast<void *>(nativeCommand)},
+         {"log", "(Ljava/lang/String;)V",
+          reinterpret_cast<void *>(nativeLog)}});
     if (!env.registerNativeMethods(
             "org/musicplayer/player/LockPlayerActivity",
             {{"spectrum", "()[F", reinterpret_cast<void *>(nativeSpectrum)},

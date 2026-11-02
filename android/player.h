@@ -160,6 +160,7 @@ public:
     void checkFilesAccess();
     Q_INVOKABLE void search(const QString &text) { m_model.setQuery(text); }
     Q_INVOKABLE void sortBy(const QString &key) { m_model.setSort(key); }
+    Q_INVOKABLE QVariantList genres() const { return m_model.genreList(); }
     Q_INVOKABLE void
     playRow(int row);  // queue = the list as shown, start at this row
     Q_INVOKABLE void

@@ -96,6 +96,8 @@ QHash<int, QByteArray> TrackModel::roleNames() const {
 bool TrackModel::load(const QString &dbPath, QString *error) {
     QVector<Track> all;
     QHash<qint64, int> index;
+    QHash<QString, QString> genreNames;
+    QHash<QString, int> genreCounts;
     {
         QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", "tracks");
         db.setDatabaseName(dbPath);
@@ -172,6 +174,13 @@ bool TrackModel::load(const QString &dbPath, QString *error) {
         t.keyArtist = searchKey(t.artist);
         t.keyAlbum = searchKey(t.album);
         t.keyGenre = searchKey(t.genre);
+        for (const QString &g : t.genres) {
+            QString k = searchKey(g);
+            if (k.isEmpty() || t.keyGenres.contains(k)) continue;
+            t.keyGenres << k;
+            if (!genreNames.contains(k)) genreNames.insert(k, g);
+            ++genreCounts[k];
+        }
         t.keyPath = searchKey(t.path);
         QString num = QString("%1").arg(t.number, 4, 10, QChar('0'));
         t.sortArtist = t.artist.toLower() + '\x01' + t.album.toLower() +
@@ -179,10 +188,19 @@ bool TrackModel::load(const QString &dbPath, QString *error) {
         t.sortTitle = t.title.toLower() + '\x01' + t.artist.toLower();
         t.sortAlbum =
             t.album.toLower() + '\x01' + num + '\x01' + t.title.toLower();
+        // all of the genres, in alphabetical order; songs without one last
+        QStringList genres;
+        for (const QString &g : t.genres) genres << g.toLower();
+        genres.sort();
+        t.sortGenre = (genres.isEmpty() ? QString(QChar(0xffff))
+                                        : genres.join(' ')) +
+                      '\x01' + t.sortArtist;
     }
     beginResetModel();
     m_all = all;
     m_index = index;
+    m_genreNames = genreNames;
+    m_genreCounts = genreCounts;
     rebuild();
     endResetModel();
     emit countChanged();
@@ -264,9 +282,11 @@ const QString &TrackModel::fieldKey(const Track &t, int field) {
 
 void TrackModel::setQuery(const QString &text) {
     QVector<Term> terms = parseQuery(text);
-    if (terms == m_terms) return;
+    QString key = searchKey(text);
+    if (terms == m_terms && key == m_queryKey) return;
     beginResetModel();
     m_terms = terms;
+    m_queryKey = key;
     rebuild();
     endResetModel();
     emit countChanged();
@@ -280,11 +300,28 @@ void TrackModel::setSort(const QString &key) {
     endResetModel();
 }
 
-// Every search term has to start a word of the track's title, artist, album or
-// genre (or of the one field it names).
+QVariantList TrackModel::genreList() const {
+    QList<QString> keys = m_genreNames.keys();
+    std::sort(keys.begin(), keys.end());
+    QVariantList out;
+    for (const QString &k : keys)
+        out << QVariantMap{{"name", m_genreNames[k]},
+                           {"count", m_genreCounts[k]}};
+    return out;
+}
+
+// When the search text is a genre of the library (as the picker enters it),
+// the list is the songs that have that genre.  Otherwise every search term
+// has to start a word of the track's title, artist, album or genre (or of the
+// one field it names).
 void TrackModel::rebuild() {
     m_view.clear();
+    bool oneGenre = m_genreNames.contains(m_queryKey);
     for (int i = 0; i < m_all.size(); ++i) {
+        if (oneGenre) {
+            if (m_all[i].keyGenres.contains(m_queryKey)) m_view.append(i);
+            continue;
+        }
         bool all = true;
         for (const Term &w : m_terms)
             if (!(' ' + fieldKey(m_all[i], w.field) + ' ')
@@ -303,6 +340,8 @@ void TrackModel::rebuild() {
         std::stable_sort(m_view.begin(), m_view.end(), less(&Track::sortTitle));
     else if (m_sort == "album")
         std::stable_sort(m_view.begin(), m_view.end(), less(&Track::sortAlbum));
+    else if (m_sort == "genre")
+        std::stable_sort(m_view.begin(), m_view.end(), less(&Track::sortGenre));
     else if (m_sort == "path")
         std::stable_sort(m_view.begin(), m_view.end(), less(&Track::path));
     else

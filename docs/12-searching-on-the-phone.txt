@@ -68,8 +68,24 @@ Sorting
 -------
 
 The button next to the search box sets the order: Artist (the default,
-then album, track number and title), Title, Album (then track number)
-or Folder (the file's path).  The search applies to the sorted list.
+then album, track number and title), Title, Album (then track number),
+Genre (then artist, album, track number and title) or Folder (the file's
+path).  A song with several genres is placed by all of them taken together,
+in alphabetical order, and songs without a genre come last.  The search
+applies to the sorted list.
+
+Songs of one genre
+------------------
+
+Type the name of a genre in the search box and the list shows the songs
+that have that genre, and nothing else: a song whose title or artist
+contains the same word is not listed unless it has the genre.  Capital
+letters and punctuation do not matter.  Typing part of a name, or a name
+with other words, is the ordinary search again.
+
+To choose from the genres of the library, open the sort button and tap
+"Pick a genre...".  The list shows each genre with its number of songs;
+tapping one enters it in the search box.  Clear the box to see all songs.
 
 Playing from a result
 ---------------------

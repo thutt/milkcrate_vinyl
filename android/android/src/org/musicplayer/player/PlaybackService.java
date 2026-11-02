@@ -26,6 +26,7 @@ import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
 import android.media.session.MediaSession;
+import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.Handler;
@@ -59,6 +60,78 @@ public class PlaybackService extends Service {
 
     /** Implemented in C++ (player.cpp): a button was pressed. */
     public static native void command(int what, long argument);
+
+    /** Implemented in C++ (player.cpp): a line for the app's log file. */
+    private static native void log(String line);
+
+    // A line for logcat and for the app's log file (milkcrate-log.txt).  The
+    // log file is how the cause of a pause or a skip is found afterwards: it
+    // says who asked.
+    private static void trace(String line) {
+        Log.i("MilkcrateVinyl", line);
+        try {
+            log(line);
+        } catch (UnsatisfiedLinkError e) { /* the C++ side is not loaded */
+        }
+    }
+
+    private static final String[] COMMANDS = {
+        "play", "pause", "next", "previous", "stop", "seek",
+        "one star less", "one star more", "equalizer flat"};
+
+    private static String commandName(int what) {
+        return what >= 0 && what < COMMANDS.length ? COMMANDS[what]
+                                                   : "command " + what;
+    }
+
+    // Who asked, for a command that came through the media session: the app
+    // (a head unit and a Bluetooth headset appear as the system's Bluetooth
+    // package) and its user id.
+    private String caller() {
+        if (Build.VERSION.SDK_INT < 28 || session == null) return "unknown";
+        MediaSessionManager.RemoteUserInfo who =
+            session.getCurrentControllerInfo();
+        return who == null ? "unknown"
+                           : who.getPackageName() + " uid " + who.getUid();
+    }
+
+    private static String focusName(int change) {
+        switch (change) {
+            case AudioManager.AUDIOFOCUS_GAIN: return "GAIN";
+            case AudioManager.AUDIOFOCUS_LOSS: return "LOSS";
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                return "LOSS_TRANSIENT";
+            case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                return "LOSS_TRANSIENT_CAN_DUCK";
+            default: return "change " + change;
+        }
+    }
+
+    private static String typeName(int type) {
+        switch (type) {
+            case AudioDeviceInfo.TYPE_BUILTIN_SPEAKER:
+                return "built-in speaker";
+            case AudioDeviceInfo.TYPE_BUILTIN_EARPIECE: return "earpiece";
+            case AudioDeviceInfo.TYPE_BLUETOOTH_A2DP: return "Bluetooth A2DP";
+            case AudioDeviceInfo.TYPE_BLUETOOTH_SCO: return "Bluetooth SCO";
+            case AudioDeviceInfo.TYPE_WIRED_HEADPHONES:
+                return "wired headphones";
+            case AudioDeviceInfo.TYPE_WIRED_HEADSET: return "wired headset";
+            case AudioDeviceInfo.TYPE_USB_DEVICE: return "USB device";
+            case AudioDeviceInfo.TYPE_USB_HEADSET: return "USB headset";
+            case AudioDeviceInfo.TYPE_USB_ACCESSORY: return "USB accessory";
+            case AudioDeviceInfo.TYPE_BLE_HEADSET: return "BLE headset";
+            case AudioDeviceInfo.TYPE_BLE_SPEAKER: return "BLE speaker";
+            case AudioDeviceInfo.TYPE_TELEPHONY: return "telephony";
+            default: return "type " + type;
+        }
+    }
+
+    private static String describe(AudioDeviceInfo device) {
+        return typeName(device.getType()) + " \"" + device.getProductName() +
+            "\" id " + device.getId() + " address \"" + device.getAddress() +
+            "\"";
+    }
 
     private static int R_STAR_DOWN,
         R_STAR_UP;  // drawable ids, looked up by name (this file is built
@@ -95,6 +168,8 @@ public class PlaybackService extends Service {
         @Override
         public void onAudioDevicesAdded(AudioDeviceInfo[] added) {
             for (AudioDeviceInfo device : added) {
+                if (device.isSink())
+                    trace("output added: " + describe(device));
                 BluetoothVolume.connected(PlaybackService.this, device);
                 if (device.isSink() &&
                     (device.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
@@ -106,6 +181,8 @@ public class PlaybackService extends Service {
         @Override
         public void onAudioDevicesRemoved(AudioDeviceInfo[] removed) {
             for (AudioDeviceInfo device : removed) {
+                if (device.isSink())
+                    trace("output removed: " + describe(device));
                 if (!device.isSink() || !external(device.getType())) continue;
                 pauseForOutput("output removed, type " + device.getType());
                 return;
@@ -142,7 +219,8 @@ public class PlaybackService extends Service {
     }
 
     private void focusChanged(int change) {
-        Log.i("MilkcrateVinyl", "audio focus changed: " + change);
+        trace("audio focus changed: " + focusName(change) +
+              ", music " + (playingNow ? "playing" : "not playing"));
         switch (change) {
             case AudioManager.AUDIOFOCUS_LOSS:
                 hasFocus = false;
@@ -187,7 +265,7 @@ public class PlaybackService extends Service {
     }
 
     private void pauseForOutput(String why) {
-        Log.i("MilkcrateVinyl", "pausing: " + why);
+        trace("pausing: " + why);
         send(PAUSE, 0);
     }
 
@@ -246,28 +324,50 @@ public class PlaybackService extends Service {
                                                  getPackageName());
         session = new MediaSession(this, "Music");
         session.setCallback(new MediaSession.Callback() {
+            // the media buttons (a head unit, a headset, the lock screen) reach
+            // the callbacks below; the key is logged first, then the command
+            @Override
+            public boolean onMediaButtonEvent(Intent button) {
+                android.view.KeyEvent key =
+                    button.getParcelableExtra(Intent.EXTRA_KEY_EVENT,
+                                              android.view.KeyEvent.class);
+                if (key != null)
+                    trace("media button " +
+                          android.view.KeyEvent.keyCodeToString(
+                              key.getKeyCode()) +
+                          (key.getAction() == android.view.KeyEvent.ACTION_DOWN
+                               ? " down" : " up") +
+                          " from " + caller());
+                return super.onMediaButtonEvent(button);
+            }
             @Override
             public void onPlay() {
+                trace("media session: play from " + caller());
                 send(PLAY, 0);
             }
             @Override
             public void onPause() {
+                trace("media session: pause from " + caller());
                 send(PAUSE, 0);
             }
             @Override
             public void onSkipToNext() {
+                trace("media session: next from " + caller());
                 send(NEXT, 0);
             }
             @Override
             public void onSkipToPrevious() {
+                trace("media session: previous from " + caller());
                 send(PREVIOUS, 0);
             }
             @Override
             public void onStop() {
+                trace("media session: stop from " + caller());
                 send(STOP, 0);
             }
             @Override
             public void onSeekTo(long position) {
+                trace("media session: seek from " + caller());
                 send(SEEK, position);
             }
             @Override
@@ -283,6 +383,9 @@ public class PlaybackService extends Service {
         });
         session.setActive(true);
         audioManager = getSystemService(AudioManager.class);
+        for (AudioDeviceInfo device :
+             audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
+            trace("output present: " + describe(device));
         audioManager.registerAudioDeviceCallback(outputs, new Handler());
         registerReceiver(screenOn, new IntentFilter(Intent.ACTION_SCREEN_ON));
         registerReceiver(
@@ -301,7 +404,9 @@ public class PlaybackService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_COMMAND.equals(action)) {
-            send(intent.getIntExtra("what", PAUSE), 0);
+            int what = intent.getIntExtra("what", PAUSE);
+            trace("notification button: " + commandName(what));
+            send(what, 0);
         } else if (ACTION_UPDATE.equals(action)) {
             show(intent.getStringExtra("title"),
                  intent.getStringExtra("artist"),

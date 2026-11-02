@@ -342,6 +342,36 @@ placed.  Buffers of the song before, still on their way when the song
 is changed, are dropped, and the log says how many.  Pause, resume,
 seek and a song chosen from a list are logged with the position.
 
+Who asked for a pause or a skip.  When the music stops or a song is
+skipped without the person in the car touching the phone, these lines
+come just before "paused from outside the app" or "next song asked for
+(button or list)":
+
+    media session: pause | play | next | previous | stop | seek from
+        PACKAGE uid N            a command through the media session; a
+                                 head unit or a Bluetooth headset shows
+                                 as the system's Bluetooth package
+    media button KEYCODE_... down | up from PACKAGE uid N
+                                 the key itself (media next, play pause)
+    audio focus changed: LOSS | LOSS_TRANSIENT |
+        LOSS_TRANSIENT_CAN_DUCK | GAIN, music playing | not playing
+                                 another app (a call, navigation, a
+                                 notification) asked for the sound
+    pausing: becoming noisy | output removed, type N
+                                 headphones or a car went away
+    notification button: pause   a button of the notification
+
+Where the sound goes.  Every output is logged when it comes, goes or
+exists at the start:
+
+    output present | added | removed: TYPE "NAME" id N address "A"
+    the output devices changed: "NAME" id N (default); "NAME" id N; ...
+    sound output "NAME" id N: ...
+
+A car often lists one Bluetooth name for two kinds of output (TYPE
+Bluetooth A2DP for music, Bluetooth SCO for calls); the type, the id and
+the address tell which one the music moved to.
+
 Copy the file to the computer with adb pull or a file manager.
 
 How the sound is played

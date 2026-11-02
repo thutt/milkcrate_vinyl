@@ -80,8 +80,16 @@ void Engine::init() {
     m_drain->setInterval(10);
     connect(m_drain, &QTimer::timeout, this, &Engine::drainSink);
     m_devices = new QMediaDevices(this);
-    connect(m_devices, &QMediaDevices::audioOutputsChanged, this,
-            [this] { m_devicesChanged = true; });
+    connect(m_devices, &QMediaDevices::audioOutputsChanged, this, [this] {
+        m_devicesChanged = true;
+        QByteArray defaultId = QMediaDevices::defaultAudioOutput().id();
+        QStringList names;
+        for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+            names << QString("\"%1\" id %2%3")
+                         .arg(d.description(), QString::fromUtf8(d.id()),
+                              d.id() == defaultId ? " (default)" : "");
+        qInfo("the output devices changed: %s", qPrintable(names.join("; ")));
+    });
     connect(m_player, &QMediaPlayer::errorOccurred, this,
             [this](QMediaPlayer::Error, const QString &text) {
                 qWarning("\"%s\": cannot play: %s", qPrintable(m_title),
@@ -332,9 +340,9 @@ void Engine::openSink(int sourceRate) {
     m_sourceRate = sourceRate;
     m_sinkRate = format.sampleRate();
     m_devicesChanged = false;
-    qInfo("sound output \"%s\": %d Hz asked for, %d Hz used, device "
+    qInfo("sound output \"%s\" id %s: %d Hz asked for, %d Hz used, device "
           "prefers %d Hz, buffer %d bytes", qPrintable(device.description()),
-          sourceRate, format.sampleRate(),
+          device.id().constData(), sourceRate, format.sampleRate(),
           device.preferredFormat().sampleRate(), int(m_sink->bufferSize()));
     m_resamplePos = 0;
     m_eq.configure(sourceRate, eqGains());
