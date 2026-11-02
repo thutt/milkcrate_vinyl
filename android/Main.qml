@@ -1443,7 +1443,8 @@ ApplicationWindow {
         onAboutToShow: names = player.genres()
         ListView {
             anchors.fill: parent
-            implicitHeight: Overlay.overlay.height * 0.55
+            implicitHeight: genreDialog.Overlay.overlay
+                            ? genreDialog.Overlay.overlay.height * 0.55 : 400
             clip: true
             model: genreDialog.names
             delegate: ItemDelegate {
