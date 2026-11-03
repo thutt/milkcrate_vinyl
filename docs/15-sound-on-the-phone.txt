@@ -45,8 +45,8 @@ running); the volume is not changed after that, so the volume buttons and a
 car's own controls still work.  The values are kept in the app's own
 settings on the phone, not in tags.db, which each sync replaces.
 
-Lock screen player
-------------------
+Full screen player when locked
+------------------------------
 
 While music plays and the phone is locked, turning the screen on (the power
 button) shows a full-screen player over the lock screen instead of the plain
@@ -97,11 +97,13 @@ again; it also goes away when the phone is unlocked or the screen turns off.
     ("cover of <song>: the file <image>" or "inside the song's file").  The
     cover is also given to Android for the mini player and for a car's
     display.
-  * "..." > "Lock screen player" switches it on or off (on at first).
+  * "..." > "Full screen player when locked" switches it on or off (on at
+    first).
   * It is started by a full-screen notification.  Android 14 and later
     make you allow that for the app.  While it is not allowed the menu item
-    reads "Lock screen player: tap to allow"; tapping it opens the page
-    "Full-screen notifications" of the app's settings, where it is allowed.
+    is not checked and reads "Tap to allow full screen player"; tapping it
+    opens the page "Full-screen notifications" of the app's settings, where
+    it is allowed.  The item is checked once it is on and allowed.
     Without the permission a plain notification shows instead, and the
     full-screen player does not open by itself.
 

@@ -1283,6 +1283,8 @@ ApplicationWindow {
         readonly property bool night: Qt.styleHints.colorScheme === Qt.Dark
         modal: true
         dim: true
+        // wide enough for the longest entry, on a narrow screen as well
+        width: Math.min(window.width - 24, 340)
         Overlay.modal: Rectangle {
             color: Qt.rgba(0, 0, 0, mainMenu.night ? 0.75 : 0.6)
         }
@@ -1299,16 +1301,18 @@ ApplicationWindow {
         }
         MenuItem {
             id: lockItem
-            // Android 14 and later make the user allow it, once
+            // Android 14 and later make the user allow it, once; until it is
+            // allowed the player is not on, whatever was chosen
             property bool blocked: false
-            text: blocked ? "Lock screen player: tap to allow"
-                          : "Lock screen player"
+            text: blocked ? "Tap to allow full screen player"
+                          : "Full screen player when locked"
             font.pixelSize: 18; height: 52
             checkable: true
-            checked: player.lockPlayerOn()
+            checked: player.lockPlayerOn() && player.lockPlayerAllowed()
             onTriggered: {
-                if (blocked) { checked = true; player.lockPlayerSettings() }
+                if (blocked) player.lockPlayerSettings()
                 else player.setLockPlayerOn(checked)
+                checked = player.lockPlayerOn() && player.lockPlayerAllowed()
             }
             // looked at each time the menu opens, as the settings page may
             // have been used since
@@ -1317,7 +1321,8 @@ ApplicationWindow {
                 function onAboutToShow() {
                     lockItem.blocked =
                         player.lockPlayerOn() && !player.lockPlayerAllowed()
-                    lockItem.checked = player.lockPlayerOn()
+                    lockItem.checked =
+                        player.lockPlayerOn() && !lockItem.blocked
                 }
             }
         }

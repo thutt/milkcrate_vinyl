@@ -311,7 +311,7 @@ public class PlaybackService extends Service {
         // the full-screen view needs a channel of high importance; it makes no
         // sound
         NotificationChannel lock = new NotificationChannel(
-            LOCK_CHANNEL, "Lock screen player",
+            LOCK_CHANNEL, "Full screen player when locked",
             NotificationManager.IMPORTANCE_HIGH);
         lock.setSound(null, null);
         lock.enableVibration(false);
