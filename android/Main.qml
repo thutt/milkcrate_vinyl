@@ -1071,154 +1071,170 @@ ApplicationWindow {
         id: equalizer
         title: "Equalizer"
         standardButtons: Dialog.Close
-        ColumnLayout {
+        // the ten bands and the rest are taller than a phone's screen: the
+        // dialog is as tall as the screen allows and the content scrolls
+        contentHeight: eqContent.implicitHeight
+        height: Math.min(implicitHeight, Overlay.overlay.height - 32)
+        Flickable {
             anchors.fill: parent
-            spacing: 4
-            Switch {
-                text: "Equalizer on"
-                checked: player.eqOn
-                onToggled: player.eqOn = checked
-            }
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                font.pixelSize: 12
-                opacity: 0.7
-                text: "Switching it on or off takes effect with the next song."
-            }
-            Switch {
-                Layout.fillWidth: true
-                text: "Auto: a preset for each song's genre"
-                checked: player.eqAuto
-                onToggled: player.eqAuto = checked
-            }
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                font.pixelSize: 12
-                opacity: 0.7
-                visible: player.eqAuto
-                text: player.eqAutoName !== ""
-                      ? "This song: " + player.eqAutoName
-                      : "This song has no genre with a preset: the settings " +
-                        "below are used."
-            }
-            // while a song's automatic preset applies, the controls show it
-            // and are locked: they would change settings that are not used
-            // the preset's name between two arrows; each arrow moves to the
-            // next preset (round the list) and it applies at once
-            RowLayout {
-                id: presetRow
-                Layout.fillWidth: true
-                readonly property bool locked:
-                    player.eqAuto && player.eqAutoName !== ""
-                function step(direction) {
-                    var count = player.eqPresets.length;
-                    var at = player.eqPresets.indexOf(player.eqShownPreset);
-                    // "Custom" is not in the list: go to the first or last
-                    at = at < 0 ? (direction > 0 ? 0 : count - 1)
-                                : (at + direction + count) % count;
-                    player.setEqPreset(player.eqPresets[at]);
-                }
-                ToolButton {
-                    text: "\u2190"
-                    font.pixelSize: 28
-                    enabled: !presetRow.locked
-                    onClicked: presetRow.step(-1)
+            contentHeight: eqContent.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar {}
+            ColumnLayout {
+                id: eqContent
+                // the scroll bar has the room to its right
+                width: parent.width - 14
+                spacing: 4
+                Switch {
+                    text: "Equalizer on"
+                    checked: player.eqOn
+                    onToggled: player.eqOn = checked
                 }
                 Label {
                     Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideRight
-                    font.pixelSize: 18
-                    opacity: presetRow.locked ? 0.6 : 1
-                    text: player.eqShownPreset
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    opacity: 0.7
+                    text: "Switching it on or off takes effect with the " +
+                          "next song."
                 }
-                ToolButton {
-                    text: "\u2192"
-                    font.pixelSize: 28
-                    enabled: !presetRow.locked
-                    onClicked: presetRow.step(1)
-                }
-            }
-            Repeater {
-                model: 10
-                RowLayout {
+                Switch {
                     Layout.fillWidth: true
-                    TextMetrics {
-                        id: bandWidth
-                        font: bandText.font
-                        text: "125 Hz"  // the widest, so the bars line up
+                    text: "Auto: a preset for each song's genre"
+                    checked: player.eqAuto
+                    onToggled: player.eqAuto = checked
+                }
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    opacity: 0.7
+                    visible: player.eqAuto
+                    text: player.eqAutoName !== ""
+                          ? "This song: " + player.eqAutoName
+                          : "This song has no genre with a preset: the " +
+                            "settings below are used."
+                }
+                // while a song's automatic preset applies, the controls show it
+                // and are locked: they would change settings that are not used
+                // the preset's name between two arrows; each arrow moves to the
+                // next preset (round the list) and it applies at once
+                RowLayout {
+                    id: presetRow
+                    Layout.fillWidth: true
+                    readonly property bool locked:
+                        player.eqAuto && player.eqAutoName !== ""
+                    function step(direction) {
+                        var count = player.eqPresets.length;
+                        var at = player.eqPresets.indexOf(player.eqShownPreset);
+                        // "Custom" is not in the list: go to the first or last
+                        at = at < 0 ? (direction > 0 ? 0 : count - 1)
+                                    : (at + direction + count) % count;
+                        player.setEqPreset(player.eqPresets[at]);
+                    }
+                    ToolButton {
+                        text: "\u2190"
+                        font.pixelSize: 28
+                        enabled: !presetRow.locked
+                        onClicked: presetRow.step(-1)
                     }
                     Label {
-                        id: bandText
-                        Layout.minimumWidth: bandWidth.advanceWidth + 2
-                        text: player.eqBands[index]
-                    }
-                    Slider {
-                        id: bandSlider
                         Layout.fillWidth: true
-                        from: -12
-                        to: 12
-                        stepSize: 1
-                        enabled: !(player.eqAuto && player.eqAutoName !== "")
-                        onMoved: player.setEqBand(index, value)
-                        // moving the slider by hand replaces a plain binding
-                        // for good; this one stays, so the bar follows the
-                        // song's automatic preset
-                        Binding {
-                            target: bandSlider
-                            property: "value"
-                            value: player.eqShownGains[index]
-                            restoreMode: Binding.RestoreNone
+                        horizontalAlignment: Text.AlignHCenter
+                        elide: Text.ElideRight
+                        font.pixelSize: 18
+                        opacity: presetRow.locked ? 0.6 : 1
+                        text: player.eqShownPreset
+                    }
+                    ToolButton {
+                        text: "\u2192"
+                        font.pixelSize: 28
+                        enabled: !presetRow.locked
+                        onClicked: presetRow.step(1)
+                    }
+                }
+                Repeater {
+                    model: 10
+                    RowLayout {
+                        Layout.fillWidth: true
+                        TextMetrics {
+                            id: bandWidth
+                            font: bandText.font
+                            text: "125 Hz"  // the widest, so the bars line up
+                        }
+                        Label {
+                            id: bandText
+                            Layout.minimumWidth: bandWidth.advanceWidth + 2
+                            text: player.eqBands[index]
+                        }
+                        Slider {
+                            id: bandSlider
+                            Layout.fillWidth: true
+                            from: -12
+                            to: 12
+                            stepSize: 1
+                            enabled: !(player.eqAuto &&
+                                       player.eqAutoName !== "")
+                            onMoved: player.setEqBand(index, value)
+                            // moving the slider by hand replaces a plain
+                            // binding for good; this one stays, so the bar
+                            // follows the song's automatic preset
+                            Binding {
+                                target: bandSlider
+                                property: "value"
+                                value: player.eqShownGains[index]
+                                restoreMode: Binding.RestoreNone
+                            }
+                        }
+                        TextMetrics {
+                            id: dbWidth
+                            font: dbText.font
+                            text: "-12 dB"
+                        }
+                        Label {
+                            id: dbText
+                            // wide enough for "-12 dB", never cut off; the
+                            // slider gives way
+                            Layout.minimumWidth: dbWidth.advanceWidth + 2
+                            horizontalAlignment: Text.AlignRight
+                            text: (player.eqShownGains[index] > 0 ? "+" : "") +
+                                  player.eqShownGains[index].toFixed(0) + " dB"
                         }
                     }
-                    TextMetrics {
-                        id: dbWidth
-                        font: dbText.font
-                        text: "-12 dB"
-                    }
-                    Label {
-                        id: dbText
-                        // wide enough for "-12 dB", never cut off; the slider
-                        // gives way
-                        Layout.minimumWidth: dbWidth.advanceWidth + 2
-                        horizontalAlignment: Text.AlignRight
-                        text: (player.eqShownGains[index] > 0 ? "+" : "") +
-                              player.eqShownGains[index].toFixed(0) + " dB"
-                    }
                 }
-            }
-            // saved presets: "Save as" keeps the five sliders under a name;
-            // Delete removes the saved preset that is shown
-            RowLayout {
-                Layout.fillWidth: true
-                Button {
-                    text: "Save as\u2026"
-                    enabled: !presetRow.locked
-                    onClicked: {
-                        presetName.text = player.eqCustomNames.indexOf(
-                            player.eqShownPreset) >= 0
-                            ? player.eqShownPreset : ""
-                        presetError.text = ""
-                        savePreset.open()
-                        presetName.forceActiveFocus()
+                // saved presets: "Save as" keeps the five sliders under a name;
+                // Delete removes the saved preset that is shown
+                RowLayout {
+                    Layout.fillWidth: true
+                    Button {
+                        text: "Save as\u2026"
+                        enabled: !presetRow.locked
+                        onClicked: {
+                            presetName.text = player.eqCustomNames.indexOf(
+                                player.eqShownPreset) >= 0
+                                ? player.eqShownPreset : ""
+                            presetError.text = ""
+                            savePreset.open()
+                            presetName.forceActiveFocus()
+                        }
+                    }
+                    Button {
+                        text: "Delete"
+                        enabled: player.eqCustomNames.indexOf(
+                                     player.eqShownPreset) >= 0
+                        onClicked: player.deleteEqPreset(player.eqShownPreset)
                     }
                 }
-                Button {
-                    text: "Delete"
-                    enabled: player.eqCustomNames.indexOf(
-                                 player.eqShownPreset) >= 0
-                    onClicked: player.deleteEqPreset(player.eqShownPreset)
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 12
+                    opacity: 0.7
+                    text: "With Auto on, a saved preset is used for a song " +
+                          "when one of its genres contains the preset's " +
+                          "name."
                 }
-            }
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                font.pixelSize: 12
-                opacity: 0.7
-                text: "With Auto on, a saved preset is used for a song when " +
-                      "one of its genres contains the preset's name."
             }
         }
     }
@@ -1247,6 +1263,169 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 color: Material.accent
                 visible: text !== ""
+            }
+        }
+    }
+
+    // the colours of the equalizer's bars in the full screen player: one for
+    // the ten bands and one for the bar of the whole sound.  A row of radio
+    // buttons for each, under the five colours, and below them a sample of
+    // the display that takes the colours at once.  The choice is kept on the
+    // phone and applies the next time the full screen player opens.
+    PopupDialog {
+        id: spectrumColors
+        title: "Equalizer colors"
+        readonly property var choices: [0x00DFFF, 0x168BFF, 0x00FFB0,
+                                        0xFFB000, 0xFFE94A]
+        property int bandsRgb: 0xFFB000
+        property int allRgb: 0x00FFB0
+        // the sample: four of the bands and the bar of the whole sound, with
+        // example levels and falling peaks as fractions of the bar
+        readonly property var sample: [0.86, 0.58, 0.52, 0.40, 0.72]
+        readonly property var peaks: [0.94, 0.66, 0.60, 0.48, 0.81]
+        readonly property var names: ["62", "250", "1k", "4k", "all"]
+        function colour(rgb, toward) {
+            var r = ((rgb >> 16) & 255) / 255, g = ((rgb >> 8) & 255) / 255,
+                b = (rgb & 255) / 255
+            // the bright tip is the colour most of the way to white
+            return toward ? Qt.rgba(r + (1 - r) * 0.6, g + (1 - g) * 0.6,
+                                    b + (1 - b) * 0.6, 1)
+                          : Qt.rgba(r, g, b, 1)
+        }
+        onAboutToShow: {
+            bandsRgb = player.spectrumColor(false)
+            allRgb = player.spectrumColor(true)
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 6
+                columnSpacing: 0
+                rowSpacing: 0
+                Label {
+                    text: "Bands"
+                    font.pixelSize: 14
+                    Layout.row: 1; Layout.column: 0
+                    Layout.preferredWidth: 52
+                }
+                Label {
+                    text: "All"
+                    font.pixelSize: 14
+                    Layout.row: 2; Layout.column: 0
+                    Layout.preferredWidth: 52
+                }
+                Repeater {
+                    model: spectrumColors.choices
+                    Rectangle {
+                        Layout.row: 0; Layout.column: index + 1
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: 36; Layout.preferredHeight: 36
+                        radius: 4
+                        color: spectrumColors.colour(modelData, false)
+                    }
+                }
+                ButtonGroup { id: bandsGroup }
+                ButtonGroup { id: allGroup }
+                Repeater {
+                    model: spectrumColors.choices
+                    RadioButton {
+                        Layout.row: 1; Layout.column: index + 1
+                        Layout.alignment: Qt.AlignHCenter
+                        ButtonGroup.group: bandsGroup
+                        checked: spectrumColors.bandsRgb === modelData
+                        onClicked: {
+                            spectrumColors.bandsRgb = modelData
+                            player.setSpectrumColor(false, modelData)
+                        }
+                    }
+                }
+                Repeater {
+                    model: spectrumColors.choices
+                    RadioButton {
+                        Layout.row: 2; Layout.column: index + 1
+                        Layout.alignment: Qt.AlignHCenter
+                        ButtonGroup.group: allGroup
+                        checked: spectrumColors.allRgb === modelData
+                        onClicked: {
+                            spectrumColors.allRgb = modelData
+                            player.setSpectrumColor(true, modelData)
+                        }
+                    }
+                }
+            }
+            // the sample display: sixteen segments to a bar
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.topMargin: 12
+                Layout.preferredHeight: 150
+                color: "black"
+                radius: 6
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 0
+                    uniformCellSizes: true
+                    Repeater {
+                        model: 5
+                        ColumnLayout {
+                            id: bar
+                            readonly property bool all: index === 4
+                            readonly property int rgb: all
+                                ? spectrumColors.allRgb
+                                : spectrumColors.bandsRgb
+                            readonly property int lit: Math.ceil(
+                                spectrumColors.sample[index] * 16 - 0.001)
+                            readonly property int peakAt: Math.ceil(
+                                spectrumColors.peaks[index] * 16 - 0.001)
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            spacing: 2
+                            Column {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                spacing: 1
+                                Repeater {
+                                    model: 16
+                                    Rectangle {
+                                        // from the top; segment 0 is the
+                                        // highest
+                                        readonly property int at: 15 - index
+                                        width: Math.min(parent.width * 0.6, 40)
+                                        x: (parent.width - width) / 2
+                                        height: (parent.height - 15) / 16
+                                        radius: 1
+                                        color: at === bar.peakAt - 1
+                                            ? (bar.peakAt > bar.lit
+                                               ? "#ff2418"
+                                               : spectrumColors.colour(
+                                                     bar.rgb, true))
+                                            : at < bar.lit
+                                              ? spectrumColors.colour(
+                                                    bar.rgb, false)
+                                              : Qt.rgba(
+                                                    spectrumColors.colour(
+                                                        bar.rgb, false).r,
+                                                    spectrumColors.colour(
+                                                        bar.rgb, false).g,
+                                                    spectrumColors.colour(
+                                                        bar.rgb, false).b,
+                                                    0.13)
+                                    }
+                                }
+                            }
+                            Label {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: spectrumColors.names[index]
+                                font.pixelSize: 9
+                                color: bar.all
+                                    ? spectrumColors.colour(bar.rgb, false)
+                                    : "#e2c896"
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1337,6 +1516,10 @@ ApplicationWindow {
         MenuItem {
             text: "Equalizer..."; font.pixelSize: 18; height: 52
             onTriggered: equalizer.open()
+        }
+        MenuItem {
+            text: "Equalizer colors..."; font.pixelSize: 18; height: 52
+            onTriggered: spectrumColors.open()
         }
         MenuItem {
             text: "Library..."; font.pixelSize: 18; height: 52

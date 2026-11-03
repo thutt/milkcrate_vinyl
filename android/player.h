@@ -139,6 +139,8 @@ public:
     Q_INVOKABLE bool lockPlayerAllowed() const;  // Android lets it show
     Q_INVOKABLE void lockPlayerSettings();       // where to allow it
     Q_INVOKABLE void showFullScreen();           // the view, unlocked
+    Q_INVOKABLE int spectrumColor(bool all) const;  // 0xRRGGBB
+    Q_INVOKABLE void setSpectrumColor(bool all, int rgb);
     Q_INVOKABLE bool fullScreenAwake() const;    // keeps the screen on
     Q_INVOKABLE void setFullScreenAwake(bool on);
     Q_INVOKABLE void forgetBluetoothVolume(const QString &address);

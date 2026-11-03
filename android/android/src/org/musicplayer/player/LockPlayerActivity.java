@@ -202,6 +202,24 @@ public class LockPlayerActivity extends Activity {
             .edit().putBoolean("awake", on).apply();
     }
 
+    static final int BANDS_COLOR = 0xFFB000, ALL_COLOR = 0x00FFB0;
+
+    // the colour (0xRRGGBB) of the ten bands, or of the bar for the whole
+    // sound; the dialog in Main.qml offers the choices
+    public static int spectrumColor(Context context, boolean all) {
+        return context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+            .getInt(all ? "all_color" : "bands_color",
+                    all ? ALL_COLOR : BANDS_COLOR) & 0xFFFFFF;
+    }
+
+    // takes effect the next time the view is opened
+    public static void setSpectrumColor(Context context, boolean all,
+                                        int rgb) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+            .edit().putInt(all ? "all_color" : "bands_color", rgb & 0xFFFFFF)
+            .apply();
+    }
+
     // the full-screen view from the player's own screen
     public static void open(Context context) {
         context.startActivity(new Intent(context, LockPlayerActivity.class)
@@ -647,11 +665,11 @@ public class LockPlayerActivity extends Activity {
                                                "1k", "2k", "4k", "8k", "16k",
                                                "all"};
         private static final int SEGMENTS = 16, BANDS = 10, COLUMNS = 11;
-        // an 80s display seen through its blue filter
-        private static final int LIT = Color.rgb(0, 210, 255),
-                                 TIP = Color.rgb(190, 245, 255),
-                                 DIM = Color.argb(34, 0, 210, 255),
-                                 RED = Color.rgb(255, 36, 24);  // an LED
+        // an 80s display: the lit segments, the bright tip of a bar and the
+        // dim track, for the bands and for the whole sound; the tip is the
+        // colour most of the way to white
+        private static final int RED = Color.rgb(255, 36, 24);  // an LED
+        private final int bandLit, bandTip, bandDim, allLit, allTip, allDim;
         private final float[] gain = new float[BANDS], shown = new float[COLUMNS],
                               peak = new float[COLUMNS];
         boolean live = false, bypassed = false, auto = false, locked = false;
@@ -660,8 +678,24 @@ public class LockPlayerActivity extends Activity {
         private int last = -100;  // the last gain sent while dragging
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
+        private static int tipOf(int rgb) {
+            return Color.rgb(Color.red(rgb) + (255 - Color.red(rgb)) * 6 / 10,
+                             Color.green(rgb) +
+                             (255 - Color.green(rgb)) * 6 / 10,
+                             Color.blue(rgb) +
+                             (255 - Color.blue(rgb)) * 6 / 10);
+        }
+
         EqView(Context context) {
             super(context);
+            int bands = spectrumColor(context, false) | 0xFF000000;
+            int all = spectrumColor(context, true) | 0xFF000000;
+            bandLit = bands;
+            bandTip = tipOf(bands);
+            bandDim = (bands & 0xFFFFFF) | (34 << 24);
+            allLit = all;
+            allTip = tipOf(all);
+            allDim = (all & 0xFFFFFF) | (34 << 24);
         }
 
         // values: see LockPlayerActivity.spectrum
@@ -738,8 +772,11 @@ public class LockPlayerActivity extends Activity {
                     boolean on = i < lit;
                     // the bright top segment: the end of the bar while it is
                     // pushed up, and LED red once it sinks slowly above it
-                    paint.setColor(i == top - 1 ? (top > lit ? RED : TIP)
-                                                : on ? LIT : DIM);
+                    boolean all = b == BANDS;
+                    paint.setColor(i == top - 1
+                                   ? (top > lit ? RED : all ? allTip : bandTip)
+                                   : on ? (all ? allLit : bandLit)
+                                        : (all ? allDim : bandDim));
                     canvas.drawRect(cx - bar / 2, bottom - segment,
                                     cx + bar / 2, bottom, paint);
                 }
@@ -756,7 +793,8 @@ public class LockPlayerActivity extends Activity {
                     canvas.drawRect(cx - bar / 2 - 3 * d, y - 1.5f * d,
                                     cx + bar / 2 + 3 * d, y + 1.5f * d, paint);
                 }
-                paint.setColor(Color.argb(210, 226, 200, 150));  // champagne
+                paint.setColor(b == BANDS ? Color.argb(230, 0, 255, 176)
+                                          : Color.argb(210, 226, 200, 150));
                 paint.setTextSize(10 * d);
                 canvas.drawText(NAMES[b], cx, h - 3 * d, paint);
             }

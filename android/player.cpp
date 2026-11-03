@@ -575,6 +575,31 @@ void Player::setFullScreenAwake(bool on) {
 #endif
 }
 
+int Player::spectrumColor(bool all) const {
+#ifdef Q_OS_ANDROID
+    return QJniObject::callStaticMethod<jint>(
+        "org/musicplayer/player/LockPlayerActivity", "spectrumColor",
+        "(Landroid/content/Context;Z)I",
+        QNativeInterface::QAndroidApplication::context().object(),
+        jboolean(all));
+#else
+    return all ? 0x00FFB0 : 0xFFB000;
+#endif
+}
+
+void Player::setSpectrumColor(bool all, int rgb) {
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "org/musicplayer/player/LockPlayerActivity", "setSpectrumColor",
+        "(Landroid/content/Context;ZI)V",
+        QNativeInterface::QAndroidApplication::context().object(),
+        jboolean(all), jint(rgb));
+#else
+    Q_UNUSED(all)
+    Q_UNUSED(rgb)
+#endif
+}
+
 void Player::setLockPlayerOn(bool on) {
 #ifdef Q_OS_ANDROID
     QJniObject::callStaticMethod<void>(
