@@ -17,6 +17,18 @@ Operating system
 
 Linux.  The scripts were developed on Debian 13.
 
+Windows is supported for the desktop programs and for sync with the phone
+(see windows/README.txt).
+
+macOS is not supported, and it has not been tried.  Reading the code, these
+would stop it: the phone sync finds the phone's network with the Linux
+command "ip" (android/tools/phone_link.py has a branch for Windows, none for
+macOS); the scripts use "realpath -m", which macOS does not have; and
+Android's USB tethering, the other link to the phone, is not usable on
+current macOS.  The player might also treat file names with accents or
+Japanese text, or names that differ only in capital letters, differently,
+as macOS file systems store and compare names in their own way.
+
 Desktop programs (player, editor, database tools)
 -------------------------------------------------
 

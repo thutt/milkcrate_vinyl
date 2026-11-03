@@ -1,0 +1,95 @@
+#!/bin/bash
+# Copyright (c) 2026 Logic Magicians Software
+# SPDX-License-Identifier: GPL-3.0-only
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation.  It is distributed WITHOUT ANY WARRANTY;
+# see the file LICENSE for the license text.
+#
+# Runs under bash or zsh.  Paths are found from the location of this script.
+#
+# Packages the project as a tar file that is unpacked and used on Linux:
+#
+#     scripts/package-for-linux [--no-build] [--no-apk]
+#
+# The archive is ${MILKCRATEVINYL_BOD}/milkcrate-vinyl-VERSION-linux.tar.gz,
+# where VERSION is the output of git describe, and a file of the same name
+# with .sha256 added holds its checksum.  The top folder holds every file that
+# git tracks (the programs, the scripts, the Android source, the documents,
+# LICENSE and README.md) except the Windows files, and the phone's APK.  The
+# files that git does not track are left out, so nothing but the project goes
+# in.  The scripts keep their execute permission.  The APK is the source's
+# program for the phone, so the archive holds the source of what it offers.
+#
+# The APK is built first with scripts/build-for-android, unless --no-build is
+# given (the APK already in the BOD is used) or --no-apk (no APK in the
+# archive).
+set -o errexit
+set -o nounset
+set -o pipefail
+here=$(cd "$(dirname "${0}")" && pwd)
+root=$(dirname "${here}")
+. "${here}/require-venv"
+music_require_bod
+
+build=1
+with_apk=1
+for argument in "${@}"; do
+    case "${argument}" in
+        --no-build) build=0 ;;
+        --no-apk) with_apk=0 ;;
+        *)
+            echo "usage: package-for-linux [--no-build] [--no-apk]" >&2
+            exit 2
+            ;;
+    esac
+done
+
+bod=$(realpath -m -- "${MILKCRATEVINYL_BOD}")
+apk="${bod}/milkcrate-vinyl-arm64_v8a.apk"
+if [ "${with_apk}" = 1 ]; then
+    if [ "${build}" = 1 ]; then
+        "${here}/build-for-android" arm64_v8a
+    fi
+    if [ ! -f "${apk}" ]; then
+        echo "error: ${apk} is missing; run without --no-build" >&2
+        exit 1
+    fi
+fi
+
+version=$(cd "${root}" && git describe --always --dirty)
+name="milkcrate-vinyl-${version}"
+if [ -n "$(cd "${root}" && git status --porcelain --untracked-files=no)" ]
+then
+    echo "warning: tracked files have changes that are not committed;" >&2
+    echo "the package holds them, and its name says -dirty." >&2
+fi
+
+stage=$(mktemp -d "${bod}/package.XXXXXX")
+trap 'rm -rf "${stage}"' EXIT
+list="${stage}/files"
+(cd "${root}" && git ls-files -z -- . ':(exclude)windows') > "${list}"
+if [ "${with_apk}" = 1 ]; then
+    cp "${apk}" "${stage}/"
+fi
+
+# The files are named from the project's folder; the APK is added from the
+# staging folder.  The date of every file is the date of the commit, and
+# the owner is root, so the same commit gives the same archive.
+stamp=$(cd "${root}" && git log -1 --format=%cI)
+out="${bod}/${name}-linux.tar.gz"
+rm -f "${out}" "${out}.sha256"
+tar --create --file="${stage}/project.tar" --directory="${root}" --null \
+    --files-from="${list}" --transform "s,^,${name}/," --owner=0 --group=0 \
+    --numeric-owner --mtime="${stamp}" --sort=name
+if [ "${with_apk}" = 1 ]; then
+    tar --append --file="${stage}/project.tar" --directory="${stage}" \
+        --transform "s,^,${name}/," --owner=0 --group=0 --numeric-owner \
+        --mtime="${stamp}" "$(basename "${apk}")"
+fi
+gzip -n -9 < "${stage}/project.tar" > "${stage}/package.tar.gz"
+mv "${stage}/package.tar.gz" "${out}"
+(cd "${bod}" && sha256sum "$(basename "${out}")" > "${out}.sha256")
+echo "package: ${out}"
+echo "checksum: ${out}.sha256"
+tar --list --gzip --file="${out}" | wc -l | sed 's/$/ files/'
