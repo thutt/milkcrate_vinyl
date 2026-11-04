@@ -333,7 +333,7 @@ public class LockPlayerActivity extends Activity {
         page.addView(album);
         info = text(13, false, grey);
         info.setSingleLine(false);
-        info.setMaxLines(2);
+        info.setMaxLines(3);
         page.addView(info);
 
         seek = new SeekBar(this);

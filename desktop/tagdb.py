@@ -98,6 +98,21 @@ def stat_text(stats: tuple, key: str) -> str:
         return last
 
 
+def length_text(seconds: float | None) -> str:
+    # How a track's length is shown: 3:07, or 1:02:09 from an hour up; blank
+    # when it is not known.
+    if seconds is None:
+        return ""
+    total = int(round(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return (
+        f"{hours}:{minutes:02d}:{secs:02d}"
+        if hours
+        else f"{minutes}:{secs:02d}"
+    )
+
+
 def normalize(value: str) -> str:
     # A spelling-insensitive form of a name: 'A and his orchestra', 'A & his
     # Orchestra' and
@@ -218,6 +233,7 @@ class TagDb:
                         f"ALTER TABLE media_file ADD COLUMN {column} REAL"
                     )
         self._phone_columns()
+        self._length_column()
         self.path_of: dict[int, str] = {
             fid: name for name, fid in self.ids.items()
         }
@@ -254,6 +270,40 @@ class TagDb:
                 "UPDATE meta SET value = '7' WHERE key = 'schema_version' AND"
                 " value = '6'"
             )
+
+    def _length_column(self) -> None:
+        # media_file.duration: the length of the track in seconds, read from
+        # the file when it is added to the database (NULL = not read yet; the
+        # scan for new files fills it in for the files that lack it).  The
+        # schema version stays 7: a database without the column still works.
+        if "duration" not in {
+            r[1] for r in self.con.execute("PRAGMA table_info(media_file)")
+        }:
+            with self.con:
+                self.con.execute(
+                    "ALTER TABLE media_file ADD COLUMN duration REAL"
+                )
+        # the files whose length the last scan read (the views refresh them)
+        self.lengths_filled: list[str] = []
+        # Dynamic playlists that ran out of songs, were started again once and
+        # are still empty; kept while the database is open.
+        self.drained: set[int] = set()
+        self.length: dict[str, float] = {
+            p: d
+            for p, d in self.con.execute(
+                "SELECT path, duration FROM media_file WHERE duration IS NOT"
+                " NULL"
+            )
+        }
+
+    def set_lengths(self, lengths: dict[str, float]) -> None:
+        # Store the length in seconds of these files.
+        with self.con:
+            self.con.executemany(
+                "UPDATE media_file SET duration = ? WHERE id = ?",
+                [(sec, self.ids[p]) for p, sec in lengths.items()],
+            )
+        self.length.update(lengths)
 
     def _separate_name_spaces(self) -> None:
         # Version 6: playlists, containers and sequences each have their own
@@ -456,6 +506,16 @@ class TagDb:
                     for pos, p in enumerate(chosen)
                 ],
             )
+        if chosen:
+            self.drained.discard(playlist_id)
+        else:
+            self.drained.add(playlist_id)
+
+    def _restart_if_empty(self, playlist_id: int) -> None:
+        # The playlist has run out of songs: select them afresh, once.  If the
+        # rules still select nothing, it is drained.
+        if not self.playlist_entries(playlist_id):
+            self.regenerate(playlist_id)
 
     def _dynamic_played(self, path: str) -> list[int]:
         # This file was played: every dynamic playlist forgets it for good
@@ -487,6 +547,7 @@ class TagDb:
                     [(entry,) for entry in copies],
                 )
             self._refill(pid, json.loads(rules_json), played)
+            self._restart_if_empty(pid)
             changed.append(pid)
         return changed
 
@@ -522,6 +583,7 @@ class TagDb:
                 self._refill(
                     pid, rules, set(json.loads(played_json)), songs
                 )
+            self._restart_if_empty(pid)
             if stale or (
                 self.con.execute(
                     "SELECT COUNT(*) FROM playlist_item WHERE playlist_id = ?",
@@ -1002,10 +1064,18 @@ class TagDb:
                     else None
                 )
                 cur = self.con.execute(
-                    "INSERT INTO media_file(path, size, mtime, read_error)"
-                    " VALUES (?, ?, ?, ?)",
-                    (path, entry.get("size"), entry.get("mtime"), error),
+                    "INSERT INTO media_file(path, size, mtime, read_error,"
+                    " duration) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        path,
+                        entry.get("size"),
+                        entry.get("mtime"),
+                        error,
+                        entry.get("length"),
+                    ),
                 )
+                if entry.get("length") is not None:
+                    self.length[path] = entry["length"]
                 for key, values in tags.items():
                     self.con.executemany(
                         "INSERT INTO tag VALUES (?, ?, ?, ?)",
@@ -1034,6 +1104,7 @@ class TagDb:
                 self.dup_of.pop(copy, None)
             self.dup_of.pop(path, None)
             del self.ids[path], self.tags[path], self.stats[path]
+            self.length.pop(path, None)
         self._index_copies()
         self._resort()
         for pid, rules_json, played_json in list(
@@ -1090,10 +1161,20 @@ class TagDb:
                     else None
                 )
                 self.con.execute(
-                    "UPDATE media_file SET size = ?, mtime = ?, read_error = ?"
-                    " WHERE id = ?",
-                    (entry.get("size"), entry.get("mtime"), error, fid),
+                    "UPDATE media_file SET size = ?, mtime = ?, read_error = ?,"
+                    " duration = ? WHERE id = ?",
+                    (
+                        entry.get("size"),
+                        entry.get("mtime"),
+                        error,
+                        entry.get("length"),
+                        fid,
+                    ),
                 )
+                if entry.get("length") is None:
+                    self.length.pop(path, None)
+                else:
+                    self.length[path] = entry["length"]
                 self.con.execute("DELETE FROM tag WHERE file_id = ?", (fid,))
                 for key, values in tags.items():
                     self.con.executemany(

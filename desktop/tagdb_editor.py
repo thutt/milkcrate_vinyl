@@ -81,6 +81,7 @@ from tagdb import (
     TagDb,
     missing_tags,
     normalize,
+    length_text,
     stat_text,
 )
 from rating_delegate import (
@@ -118,6 +119,7 @@ TREE_COLUMNS = [
     ("BPM", "BPM"),
     ("Track", "TRACKNUMBER"),
     ("Year", "DATE"),
+    ("Length", "@length"),
     ("Album artist", "ALBUMARTIST"),
     ("Rating", "@rating"),
     ("Plays", "@plays"),
@@ -738,10 +740,13 @@ class MainWindow(QMainWindow):
         if scan_library(self, self.db, normalize):
             tags = self.db.tags
             self.playlist_panel.set_db(self.db)
+            changed = {
+                p for p in before if p in tags and tags[p] is not before[p]
+            }
             self._sync_rows(
                 [p for p in before if p not in tags],
                 [p for p in tags if p not in before],
-                [p for p in before if p in tags and tags[p] is not before[p]],
+                sorted(changed | set(self.db.lengths_filled) & set(tags)),
             )
 
     def _setup_columns(self) -> None:
@@ -965,6 +970,8 @@ class MainWindow(QMainWindow):
             cell.setText(
                 full_path(self._root, path)
                 if key == "@path"
+                else length_text(self.db.length.get(path))
+                if key == "@length"
                 else ", ".join(t.lower() for t in missing_tags(tags))
                 if key == ""
                 else (
@@ -984,7 +991,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _numeric_column(key) -> bool:
-        return key in ("@rating", "@plays") or key in NUMERIC_TAGS
+        return key in ("@rating", "@plays", "@length") or key in NUMERIC_TAGS
 
     def _sort_value(self, path: str, key):
         # A number for the numeric columns (what is not a number sorts first),
@@ -994,6 +1001,8 @@ class MainWindow(QMainWindow):
             return -1.0 if stats[0] is None else float(stats[0])
         if key == "@plays":
             return float(stats[1] or 0)
+        if key == "@length":
+            return self.db.length.get(path, -1.0)
         if key == "@last":
             return stats[2] or ""
         if key == "@format":

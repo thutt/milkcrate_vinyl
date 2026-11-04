@@ -62,7 +62,31 @@ def scan_library(parent, db, normalize) -> bool:
     box.close()
     if result is None:
         return False
+    # the length of each track is read once, so a library from before the
+    # lengths were kept gets them here
+    box = _progress(parent, "Reading the lengths of the tracks ...")
+
+    def length_tick(n: int, total: int) -> bool:
+        box.setMaximum(total)
+        box.setValue(n)
+        QApplication.processEvents()
+        return not box.wasCanceled()
+
+    db.lengths_filled, cancelled = library_scan.fill_lengths(
+        db, root, skip=result.missing, progress=length_tick
+    )
+    box.close()
+    if cancelled:
+        return bool(db.lengths_filled)
     if not (result.new or result.missing or result.changed):
+        if db.lengths_filled:
+            QMessageBox.information(
+                parent,
+                "Scan for new files",
+                f"Read the lengths of {len(db.lengths_filled)} files; all"
+                f" {result.unchanged} files match the database.",
+            )
+            return True
         QMessageBox.information(
             parent,
             "Scan for new files",

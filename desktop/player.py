@@ -86,7 +86,14 @@ from PyQt6.QtWidgets import (
 
 from rating_delegate import RATING_ROLE, STAR_MARGIN, STAR_SLOT, RatingDelegate
 from analysis_actions import detect_bpm, measure_loudness
-from tagdb import MAX_CHOICES, SPLIT_TAGS, TagDb, stat_text
+from tagdb import (
+    MAX_CHOICES,
+    SPLIT_TAGS,
+    TagDb,
+    length_text,
+    normalize,
+    stat_text,
+)
 import containers
 from search import parse_search, search_fields
 from playlists import PlaylistPanel, populate_add_menu
@@ -104,6 +111,7 @@ COLUMNS = [
     ("#", "TRACKNUMBER", 40),
     ("Genre", "GENRE", 120),
     ("Year", "DATE", 60),
+    ("Length", "@length", 60),
     ("Rating", "@rating", 80),
     ("Plays", "@plays", 50),
     ("Last played", "@last", 120),
@@ -195,6 +203,8 @@ class LibraryModel(QAbstractTableModel):
 
     def text(self, path: str, column: int) -> str:
         key = COLUMNS[column][1]
+        if key == "@length":
+            return length_text(self.db.length.get(path))
         if key.startswith("@"):
             return stat_text(self.db.stats.get(path, (None, 0, None)), key)
         values = self.db.tags[path].get(key, [])
@@ -230,6 +240,8 @@ class LibraryModel(QAbstractTableModel):
                 "@"
             ):  # sort by the stored values, not the displayed text
                 rating, plays, last = self.db.stats.get(path, (None, 0, None))
+                if key == "@length":
+                    return self.db.length.get(path, -1.0)
                 return {
                     "@rating": -1 if rating is None else rating,
                     "@plays": plays,
@@ -2054,6 +2066,7 @@ class MainWindow(QMainWindow):
             menu, "&Save Tags", QKeySequence.StandardKey.Save, self.save
         )
         add(menu, "Save S&nippet", None, self.save_snippet)
+        add(menu, "Scan for &New Files...", None, self.scan_for_files)
         add(menu, "S&ync with Phone...", None, self.sync_phone)
         add(menu, "&Review Phone Changes...", None, self.review_phone)
         add(menu, "&Quit", QKeySequence.StandardKey.Quit, self.close)
@@ -2231,6 +2244,31 @@ class MainWindow(QMainWindow):
         self._quiet = True
         self.db.con.close()
         self.db = TagDb(path)
+        self.root = self._media_root()
+        self.model = LibraryModel(self.db, self)
+        for lst in self.lists:
+            lst.proxy.setSourceModel(self.model)
+            lst.last_selection = QItemSelection()
+        self.playlist_panel.set_db(self.db)
+        self.current = []
+        self.editor.set_files([])
+        self._quiet = False
+        self._update_status()
+
+    def scan_for_files(self) -> None:
+        # File > Scan for New Files: add, remove and re-read files after the
+        # music folder changed.
+        if not self._confirm_discard():
+            return
+        from scan_dialog import scan_library
+
+        if not scan_library(self, self.db, normalize):
+            return
+        self._quiet = True
+        if self.playing is not None and self.playing not in self.db.tags:
+            self.stop()
+            self.playing = None
+        self.queue, self.queue_playlist = None, None
         self.root = self._media_root()
         self.model = LibraryModel(self.db, self)
         for lst in self.lists:

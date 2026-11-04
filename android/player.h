@@ -58,6 +58,7 @@ class Player : public QObject {
     Q_PROPERTY(QString sectionText READ sectionText NOTIFY sectionChanged)
     Q_PROPERTY(QString openName READ openName NOTIFY openChanged)
     Q_PROPERTY(bool openDynamic READ openDynamic NOTIFY openChanged)
+    Q_PROPERTY(bool openDrained READ openDrained NOTIFY openMatchedChanged)
     Q_PROPERTY(int openMatched READ openMatched NOTIFY
                    openMatchedChanged)  // library tracks the open dynamic
                                         // playlist's rules select (-1: not
@@ -78,6 +79,7 @@ public:
     EntryModel *entryModel() { return &m_entries; }
     QString sectionText() const { return m_sectionText; }
     QString openName() const { return m_openName; }
+    bool openDrained() const { return m_openDrained; }
     bool openDynamic() const { return m_openDynamic; }
     int openMatched() const { return m_openMatched; }
     qint64 playingList() const { return m_playingList; }
@@ -245,6 +247,8 @@ private:
     QString m_sectionText, m_openName;
     bool m_openDynamic = false;  // rows keep room for the "why" line
     int m_openMatched = -1;
+    bool m_openDrained = false;  // the open dynamic playlist has run dry
+    void syncOpenMatched();  // the open playlist is drained: 0 matched
     void showEntries(qint64 id);
     qint64 m_openId = -1;  // the playlist shown on the Playlists tab
     QThread m_thread;

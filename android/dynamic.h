@@ -34,6 +34,14 @@ QVector<qint64> selectTracks(const QString &dbPath, const QJsonObject &rules,
 // changed; takes dbLock() itself.
 int topUpDynamicPlaylists(const QString &dbPath, QString *problem = nullptr);
 
+// Dynamic playlists with no visible entry have run out of songs: start each
+// of them again by forgetting its entries and its "played" set, then top them
+// up.  Returns the ids of the dynamic playlists that are still empty after it
+// (the rules select nothing that may be chosen: they are drained).  Takes
+// dbLock() itself.
+QList<qint64> regenerateEmptyPlaylists(const QString &dbPath,
+                                       QString *problem = nullptr);
+
 // How many library tracks (duplicates excluded) the rules of a dynamic playlist
 // select; -1 if it has none or the database cannot be read.  Takes no lock
 // itself.
@@ -49,6 +57,11 @@ QHash<qint64, int> countAllMatches(const QString &dbPath);
 struct SongStat {
     qint64 plays = 0;
     QString last;  // "yyyy-MM-ddTHH:mm:ssZ", empty if never played
+    // these two belong to the file, not to the song: its BPM tag (0 = none)
+    // and its loudness in LUFS (when measured)
+    double bpm = 0;
+    double loudness = 0;
+    bool measured = false;
 };
 QHash<qint64, SongStat> songStats(const QString &dbPath);
 

@@ -102,6 +102,8 @@ signals:
     void ratingKnown(qint64 id, int rating);  // -1: not rated
     void eqChosen(const QString &preset);     // automatic equalizer; "": none
     void eqAdjusted(bool automatic, const QVector<double> &gains);
+    // dynamic playlists that were started again and are still empty
+    void drained(const QList<qint64> &ids);
     void playCounted();  // a play was written to the database (lists may have
                          // changed)
 public:
@@ -115,7 +117,8 @@ private:
     void chooseEqPreset();  // for the automatic equalizer, from m_genres
     const double *eqGains() const;   // the ones in use for this song
     void applyEqGains();
-    void refillLists();  // top up dynamic playlists that are short, in the
+    void regenerateLists();  // the queue ran out of songs: once, start again
+    void refillLists(bool restart = false);  // restart: empty ones too  // top up dynamic playlists that are short, in the
                          // background
     void buildOrder(int startRow, bool keepFirst);
     void playCurrent();
@@ -230,6 +233,8 @@ private:
     int m_staleMarks = 0, m_dropped = 0;  // see dropStale
     // the queue ran out: the player waits, paused, and Play starts it again
     bool m_queueEnded = false;
+    bool m_regenerated = false;  // the empty playlists were started again
+    bool m_regenerating = false;
     qint64 m_listId = -1;  // the playlist the queue was read from
     // a dynamic playlist plays from the database, one song at a time; the
     // songs already played in this round are not chosen again

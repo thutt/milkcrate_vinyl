@@ -447,7 +447,7 @@ ApplicationWindow {
                 Label {
                     visible: row.detail !== ""
                     text: row.detail; width: parent.width
-                    wrapMode: Text.Wrap; maximumLineCount: 2
+                    wrapMode: Text.Wrap; maximumLineCount: 3
                     elide: Text.ElideRight
                     font.pixelSize: 12; opacity: 0.8
                     color: Material.accent
@@ -494,7 +494,8 @@ ApplicationWindow {
             // a dynamic playlist: how many library tracks its rules select
             Label {
                 visible: tab === 1 && entriesOpen && player.openMatched >= 0
-                text: player.openMatched + " matched"
+                text: player.openMatched + " matched" +
+                      (player.openDrained ? "  ·  drained" : "")
                 // the accent colour is hard to read on the toolbar
                 font.pixelSize: 14; font.bold: true; color: "white"
             }
@@ -778,7 +779,7 @@ ApplicationWindow {
                 rating: model.rating
                 detail: model.detail
                 reserve: true
-                detailHeight: 20
+                detailHeight: 34
                 onClicked: { player.playRow(index); searchField.focus = false }
             }
         }
@@ -858,7 +859,8 @@ ApplicationWindow {
                                                    : "Paused  ·  ") : "") +
                                   detail +
                                   (matched >= 0 ? "  ·  " + matched + " matched"
-                                                : "")
+                                                : "") +
+                                  (drained ? "  ·  drained" : "")
                             width: parent.width
                             wrapMode: Text.Wrap
                             font.pixelSize: 13
@@ -897,7 +899,7 @@ ApplicationWindow {
                 rating: model.rating
                 detail: model.detail
                 reserve: true
-                detailHeight: player.openDynamic ? 34 : 20
+                detailHeight: player.openDynamic ? 48 : 34
                 onClicked: player.playEntry(index)
             }
         }

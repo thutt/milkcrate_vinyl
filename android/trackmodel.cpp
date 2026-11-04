@@ -42,9 +42,24 @@ QString searchKey(const QString &text) {
     return out.trimmed();
 }
 
-// "Plays: 3  ·  Last played: 2 days ago"; empty until the stats are read.
+// "Plays: 3  ·  Last played: 2 days ago", then the tempo and loudness on a
+// second line; empty until the stats are read.
 QString TrackModel::statText(QHash<qint64, SongStat>::const_iterator it) const {
-    return it == m_stats.constEnd() ? QString() : songStatText(*it);
+    return it == m_stats.constEnd() ? QString() : songRowText(*it);
+}
+
+QString songSoundText(const SongStat &stat) {
+    QStringList parts;
+    if (stat.bpm > 0) parts << QString("%1 BPM").arg(qRound(stat.bpm));
+    if (stat.measured)
+        parts << QString("%1 LUFS").arg(stat.loudness, 0, 'f', 1);
+    return parts.join("  \u00b7  ");
+}
+
+QString songRowText(const SongStat &stat) {
+    const QString sound = songSoundText(stat);
+    return sound.isEmpty() ? songStatText(stat)
+                           : songStatText(stat) + "\n" + sound;
 }
 
 QString songStatText(const SongStat &stat) {

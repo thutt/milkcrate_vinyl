@@ -177,6 +177,22 @@ end.  When a song is played, any other copy of it on a dynamic playlist
 leaves at once.  The phone only tops its lists up; the desktop's lists
 replace them at the next sync.
 
+Running out of songs
+--------------------
+
+When a dynamic playlist has no song left (the last one was played or
+skipped), it is regenerated once, on the desktop and on the phone: its
+entries and the set of songs played since it was made are forgotten, and
+the songs are selected afresh from the rules.  A song that was played can
+come back, unless a rule excludes it, such as "last played more than 30
+days ago".  If nothing is selected even then, the playlist is drained:
+it stays empty and shows 0 matched, with "drained", until it holds a song
+again.  That happens when its rules select a song after the library
+changes, after Refresh or Edit Rules, and, on the phone, after the
+library is read again.  A drained playlist is not regenerated again until
+then.  Drained is not stored in the database: the desktop works it out
+when the editor or the player starts, from the empty list.
+
 Why a song was chosen
 ---------------------
 

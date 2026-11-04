@@ -167,6 +167,11 @@ Player::Player(QObject *parent)
             [this](const QString &text) { say(text); });
     connect(m_engine, &Engine::playCounted, this,
             [this] { reloadPlaylists(); });
+    connect(m_engine, &Engine::drained, this,
+            [this](const QList<qint64> &ids) {
+                m_playlists.addDrained(ids);
+                syncOpenMatched();
+            });
     m_reloadTimer.setSingleShot(true);
     m_reloadTimer.setInterval(1200);
     connect(&m_reloadTimer, &QTimer::timeout, this,
@@ -779,6 +784,7 @@ void Player::reload() {
         return;
     }
     QString error;
+    m_playlists.clearDrained();  // a new library may have songs to choose
     QElapsedTimer clock;  // how long the start waits for the library
     clock.start();
     if (!m_model.load(m_dbPath, &error)) {
@@ -923,15 +929,18 @@ QString Player::eqShownPreset() const {
     return m_eqAuto && !m_eqAutoName.isEmpty() ? m_eqAutoName : eqPreset();
 }
 
-// The line that the song's row shows, for the lock screen player: why a dynamic
-// playlist chose it, or its plays and last play.
+// The lines that the song's row shows, for the lock screen player: why a
+// dynamic playlist chose it, or its plays and last play; then its tempo and
+// loudness.
 void Player::pushLockDetail() {
 #ifdef Q_OS_ANDROID
     QString line = m_entries.detailOf(m_currentId);
-    if (line.isEmpty()) {
-        const auto stats = m_model.stats();
-        auto it = stats.constFind(m_currentId);
-        if (it != stats.constEnd()) line = songStatText(*it);
+    const auto stats = m_model.stats();
+    const auto it = stats.constFind(m_currentId);
+    if (line.isEmpty() && it != stats.constEnd()) line = songStatText(*it);
+    if (it != stats.constEnd()) {
+        const QString sound = songSoundText(*it);
+        if (!sound.isEmpty()) line += (line.isEmpty() ? "" : "\n") + sound;
     }
     QJniObject::callStaticMethod<void>(
         "org/musicplayer/player/LockPlayerActivity", "setDetail",
@@ -1119,6 +1128,7 @@ void Player::openPlaylist(int row) {
     emit openChanged();
     m_openMatched = p->matched;  // from the last pass over the library, if
                                  // there has been one
+    m_openDrained = p->drained;
     emit openMatchedChanged();
     if (p->kind == "dynamic" && p->matched < 0)
         QThreadPool::globalInstance()->start(
@@ -1133,6 +1143,20 @@ void Player::openPlaylist(int row) {
                     },
                     Qt::QueuedConnection);
             });
+}
+
+// A drained playlist matches nothing that can still be chosen.
+void Player::syncOpenMatched() {
+    for (int row = 0; row < m_playlists.rowCount(); ++row) {
+        const PlaylistInfo *p = m_playlists.atRow(row);
+        if (p->id != m_openId) continue;
+        const int n = p->drained ? 0 : m_openMatched;
+        if (p->drained == m_openDrained && n == m_openMatched) return;
+        m_openDrained = p->drained;
+        m_openMatched = n;
+        emit openMatchedChanged();
+        return;
+    }
 }
 
 void Player::playEntry(int row) {
@@ -1243,6 +1267,7 @@ void Player::refreshInfo(bool lists) {
                         m_openMatched = n;
                         emit openMatchedChanged();
                     }
+                    syncOpenMatched();
                 }
                 m_infoBusy = false;
                 if (m_infoAgain) {

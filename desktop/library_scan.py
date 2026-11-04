@@ -39,6 +39,7 @@ def read_one(path: str) -> dict:
             "size": stat.st_size,
             "mtime": stat.st_mtime,
             "tags": tagio.read_tags(path),
+            "length": tagio.read_length(path),
         }
     except (OSError, tagio.TagError) as e:
         return {"error": str(e) or type(e).__name__}
@@ -122,6 +123,43 @@ def read_files(
             if progress and progress(n) is False:
                 return None
     return entries
+
+
+def read_length_of(path: str) -> float | None:
+    try:
+        return tagio.read_length(path)
+    except (OSError, tagio.TagError):
+        return None
+
+
+def fill_lengths(db, root: str, skip=(), jobs: int = 4, progress=None):
+    # Read the length of every file in the database that has none yet (a file
+    # in skip, or one that is not readable, is left alone) and store them.
+    # Returns the paths that now have a length and whether progress(n, total)
+    # cancelled the reading by returning False (what was read is kept).
+    skip = set(skip)
+    unread = {
+        p
+        for p, error in db.con.execute(
+            "SELECT path, read_error FROM media_file WHERE duration IS NULL"
+        )
+        if not error and p not in skip
+    }
+    paths = sorted(unread)
+    found: dict[str, float] = {}
+    cancelled = False
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        for start in range(0, len(paths), 200):
+            chunk = paths[start : start + 200]
+            names = [os.path.join(root, p) for p in chunk]
+            for path, length in zip(chunk, pool.map(read_length_of, names)):
+                if length is not None:
+                    found[path] = length
+            if progress and progress(start + len(chunk), len(paths)) is False:
+                cancelled = True
+                break
+    db.set_lengths(found)
+    return sorted(found), cancelled
 
 
 def clean(

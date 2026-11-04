@@ -200,6 +200,13 @@ def read_tags(path: str) -> dict[str, list[str]]:
         raise TagError(f"could not parse tags: {e}") from e
 
 
+def read_length(path: str) -> float | None:
+    # The length of the track in seconds, or None if the file does not say.
+    info = getattr(_open(path), "info", None)
+    length = getattr(info, "length", None)
+    return float(length) if length else None
+
+
 # --------------------------------------------------------------------- writing
 
 

@@ -524,6 +524,7 @@ void Engine::playQueue(const QVector<QueueItem> &items, int row, bool shuffle,
     m_visited.clear();
     m_follow = dynamic;
     m_listCached = false;
+    m_regenerated = false;
     if (m_follow) {  // the songs after this one are chosen from the database
         const QueueItem first = m_order[m_pos];
         m_order.clear();
@@ -766,9 +767,14 @@ void Engine::continueFromList(bool user) {
         return;
     const QVector<QueueItem> items = playlistItems(m_dbPath, m_listId);
     if (items.isEmpty()) {
-        qInfo("the playlist has no songs left: waiting");
+        if (m_regenerated) {
+            qInfo("the playlist has no songs left: drained");
+            return;
+        }
+        regenerateLists();
         return;
     }
+    m_regenerated = false;
     qInfo("the playlist now holds %d songs: playing them", int(items.size()));
     m_queue = items;
     m_visited.clear();  // a new round
@@ -1391,18 +1397,50 @@ void Engine::writePlayed(const QString &path, const QVector<qint64> &ids) {
 void Engine::setDatabase(const QString &path) {
     m_dbPath = path;
     m_listCached = false;
-    QTimer::singleShot(4000, this, [this] { refillLists(); });
+    m_regenerated = false;
+    QTimer::singleShot(4000, this, [this] { refillLists(true); });
+}
+
+// The queue ran out and the list holds nothing: dynamic playlists with no
+// entry are started again, once.  If they are still empty the rules select
+// nothing more to play and the lists are drained (told to the screen).
+void Engine::regenerateLists() {
+    if (m_regenerating || m_dbPath.isEmpty()) return;
+    m_regenerating = true;
+    qInfo("the playlist has no songs left: starting the dynamic playlists "
+          "again");
+    QThreadPool::globalInstance()->start([this, path = m_dbPath] {
+        QString problem;
+        const QList<qint64> still = regenerateEmptyPlaylists(path, &problem);
+        if (!problem.isEmpty()) emit message(problem);
+        QMetaObject::invokeMethod(
+            this,
+            [this, still] {
+                m_regenerating = false;
+                m_regenerated = true;
+                emit playCounted();  // the lists on the screen are read again
+                emit drained(still);
+                prefetchList();
+                continueFromList();
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 // Dynamic playlists that have fewer entries than their length (a played track
 // has just left) are topped up from their rules, in a thread of their own:
 // choosing among thousands of tracks takes a moment.  The desktop's refill
 // replaces these entries at the next sync.
-void Engine::refillLists() {
+void Engine::refillLists(bool restart) {
     if (m_dbPath.isEmpty()) return;
-    QThreadPool::globalInstance()->start([this, path = m_dbPath] {
+    QThreadPool::globalInstance()->start([this, path = m_dbPath, restart] {
         QString problem;
-        const int changed = topUpDynamicPlaylists(path, &problem);
+        int changed = topUpDynamicPlaylists(path, &problem);
+        if (problem.isEmpty() && restart) {
+            // lists that ran out while the app was closed: start them again
+            emit drained(regenerateEmptyPlaylists(path, &problem));
+            changed = 1;
+        }
         if (!problem.isEmpty())
             emit message(problem);
         else if (changed)

@@ -35,7 +35,8 @@ Details by kind:
     sequence           "3 containers: container names"
 
 "N matched" is the number of library songs that the dynamic playlist's
-rules select (05).  A playing row is tinted and its details begin with
+rules select (05).  A dynamic playlist that ran out of songs, was
+regenerated once and is still empty shows "0 matched . drained".  A playing row is tinted and its details begin with
 "Playing" or "Paused".
 
 Each row has a play button.  The marked row (grey tint) is the one the

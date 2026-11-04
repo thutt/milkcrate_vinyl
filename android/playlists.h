@@ -35,7 +35,10 @@ struct PlaylistInfo {
     bool holdsDynamic = false;  // dynamic, or a container or sequence that
                                 // holds one: never shuffled
     int matched = -1;  // dynamic playlists: library tracks the rules select
-                       // (-1: not counted yet)
+                       // (-1: not counted yet; 0 when drained)
+    int entries = 0;   // visible entries
+    bool drained = false;  // a dynamic playlist that ran out of songs, was
+                           // started again once and is still empty
 };
 
 // The tracks of one list (a playlist's entries), or the sections of a container
@@ -61,6 +64,7 @@ public:
         KindRole,
         DetailRole,
         MatchedRole,
+        DrainedRole,
         GroupRole  // the heading it is under: a dynamic playlist is a playlist
     };
     int groups() const;
@@ -74,9 +78,15 @@ public:
     void
     setItems(const QList<PlaylistInfo> &items);  // counts already known stay
     void setMatched(const QHash<qint64, int> &counts);
+    // These dynamic playlists are drained (until they hold a song again).
+    void addDrained(const QList<qint64> &ids);
+    void clearDrained();
     const PlaylistInfo *atRow(int row) const {
         return row >= 0 && row < m_items.size() ? &m_items[row] : nullptr;
     }
+private:
+    QSet<qint64> m_drained;
+
 signals:
     void countChanged();
 
@@ -111,7 +121,7 @@ public:
     // not dynamic (a dynamic one has the reason it was chosen there).
     void setStats(const QHash<qint64, SongStat> &stats);
     void setDynamic(bool dynamic);  // the playlist that is open
-    QString detailOf(qint64 id) const;  // the line of the song's row
+    QString detailOf(qint64 id) const;  // the first line of the song's row
     const QVector<QueueItem> &items() const { return m_items; }
 
 private:

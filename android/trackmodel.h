@@ -52,6 +52,11 @@ struct QueueItem {
 
 // "Plays: 3  ·  Last played: 2 days ago" (or "never"), the line under a song.
 QString songStatText(const SongStat &stat);
+// "118 BPM  ·  -9.3 LUFS": the tempo and loudness of the file, whichever are
+// known; empty when neither is.
+QString songSoundText(const SongStat &stat);
+// The two lines a song's row shows: songStatText, then songSoundText.
+QString songRowText(const SongStat &stat);
 
 class TrackModel : public QAbstractListModel {
     Q_OBJECT

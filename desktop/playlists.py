@@ -695,6 +695,7 @@ class PlaylistPanel(QWidget):
         self.can_play = can_play
         self._loading = False
         self._matched = 0  # the dynamic playlist shown: songs its rules select
+        self._drained = False  # ... and it ran out of songs
 
         self.lists = QListWidget()
         self.lists.currentItemChanged.connect(lambda *_: self._load_entries())
@@ -951,9 +952,12 @@ class PlaylistPanel(QWidget):
         self._loading = False
         dynamic = kind == "dynamic"
         songs = dyn.song_stats(self.db) if dynamic else None
+        self._drained = (
+            dynamic and not self.entries.count() and pid in self.db.drained
+        )
         self._matched = (  # counted here only: selecting rows asks for it
             len(dyn.matches(self.db, self.db.get_rules(pid), songs=songs))
-            if dynamic
+            if dynamic and not self._drained
             else 0
         )
         self._fill_details(pid if dynamic else None, songs)
@@ -976,6 +980,7 @@ class PlaylistPanel(QWidget):
             label = (
                 f"{self.entries.count()} tracks \u2014 dynamic,"
                 f" {self._matched} matched"
+                + (", drained" if self._drained else "")
             )
         else:
             label = (
@@ -1051,7 +1056,12 @@ class PlaylistPanel(QWidget):
         rules = self.db.get_rules(pid) if dynamic else None
         total = self._matched if rules else 0
         self.rules_view.setPlainText(
-            (f"{total} matched\n\n" + dyn.describe(rules)) if rules else ""
+            (
+                f"{total} matched{' (drained)' if self._drained else ''}\n\n"
+                + dyn.describe(rules)
+            )
+            if rules
+            else ""
         )
         self.rules_view.setVisible(bool(rules))
         self.refresh_button.setEnabled(dynamic)

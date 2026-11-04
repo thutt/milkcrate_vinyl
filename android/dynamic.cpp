@@ -247,14 +247,19 @@ QHash<qint64, SongStat> computeSongStats(QSqlDatabase db) {
     QSqlQuery n(db);
     n.setForwardOnly(true);
     n.exec("SELECT file_id, name, value FROM tag WHERE name IN ('ARTIST', "
-           "'TITLE') ORDER BY file_id, name, pos");
+           "'BPM', 'TITLE') ORDER BY file_id, name, pos");
+    QHash<qint64, double> bpm;
     while (n.next()) {
         const qint64 id = n.value(0).toLongLong();
         const QString value = n.value(2).toString();
         if (value.trimmed().isEmpty()) continue;
-        if (n.value(1).toString() == "ARTIST")
+        if (n.value(1).toString() == "ARTIST") {
             artist[id] += (artist.contains(id) ? " " : "") + value;
-        else if (!title.contains(id))
+        } else if (n.value(1).toString() == "BPM") {
+            bool ok = false;
+            const double v = value.trimmed().toDouble(&ok);
+            if (ok && v > 0 && !bpm.contains(id)) bpm.insert(id, v);
+        } else if (!title.contains(id))
             title[id] = value;
     }
     struct Song {
@@ -263,11 +268,13 @@ QHash<qint64, SongStat> computeSongStats(QSqlDatabase db) {
     };
     QHash<QString, Song> songs;
     QHash<qint64, QString> keyOf;
+    QHash<qint64, double> loud;
     QSqlQuery q(db);
     q.setForwardOnly(true);
-    q.exec("SELECT id, play_count, last_played FROM media_file");
+    q.exec("SELECT id, play_count, last_played, loudness FROM media_file");
     while (q.next()) {
         const qint64 id = q.value(0).toLongLong();
+        if (!q.value(3).isNull()) loud.insert(id, q.value(3).toDouble());
         const QString key = artist.contains(id) && title.contains(id)
                                 ? songName(artist[id]) + '\x01' +
                                       songName(title[id])
@@ -282,7 +289,8 @@ QHash<qint64, SongStat> computeSongStats(QSqlDatabase db) {
     out.reserve(keyOf.size());
     for (auto it = keyOf.constBegin(); it != keyOf.constEnd(); ++it) {
         const Song &song = songs[it.value()];
-        out.insert(it.key(), {song.plays, song.last});
+        out.insert(it.key(), {song.plays, song.last, bpm.value(it.key()),
+                              loud.value(it.key()), loud.contains(it.key())});
     }
     return out;
 }
@@ -796,6 +804,22 @@ QVector<Pending> shortLists(QSqlDatabase db) {
     return pending;
 }
 
+// The dynamic playlists that have no visible entry.
+QList<qint64> emptyLists(QSqlDatabase db) {
+    QSqlQuery q(db);
+    q.exec("PRAGMA table_info(playlist_item)");
+    bool marks = false;
+    while (q.next())
+        if (q.value(1).toString() == "removed_at") marks = true;
+    QList<qint64> ids;
+    if (q.exec("SELECT id FROM playlist WHERE rules IS NOT NULL AND NOT "
+               "EXISTS (SELECT 1 FROM playlist_item WHERE playlist_id = "
+               "playlist.id" +
+               QString(marks ? " AND removed_at IS NULL" : "") + ")"))
+        while (q.next()) ids.append(q.value(0).toLongLong());
+    return ids;
+}
+
 }  // namespace
 
 // Reading the lists and choosing among the whole library (over a second on the
@@ -901,6 +925,58 @@ int topUpDynamicPlaylists(const QString &dbPath, QString *problem) {
         return changed;
     }
     return 0;  // the database kept changing: the next play tries again
+}
+
+QList<qint64> regenerateEmptyPlaylists(const QString &dbPath,
+                                       QString *problem) {
+    {
+        QMutexLocker lock(&dbLock());
+        Connection c(dbPath);
+        if (!c.ok) {
+            if (problem) *problem = c.error;
+            return {};
+        }
+        QSqlDatabase db = c.db();
+        const QList<qint64> empty = emptyLists(db);
+        if (empty.isEmpty()) return {};
+        QSqlQuery q(db);
+        q.exec("PRAGMA journal_mode = DELETE");
+        q.exec("PRAGMA synchronous = FULL");
+        if (!db.transaction()) {
+            if (problem)
+                *problem = "Cannot regenerate the dynamic playlists: " +
+                           db.lastError().text();
+            return {};
+        }
+        for (qint64 id : empty) {
+            QSqlQuery forget(db);
+            forget.prepare("DELETE FROM playlist_item WHERE playlist_id = ?");
+            forget.addBindValue(id);
+            QSqlQuery unplayed(db);
+            unplayed.prepare("UPDATE playlist SET played = '[]' WHERE id = ?");
+            unplayed.addBindValue(id);
+            if (!forget.exec() || !unplayed.exec()) {
+                if (problem)
+                    *problem = "Cannot regenerate the dynamic playlists: " +
+                               (forget.lastError().isValid()
+                                    ? forget.lastError().text()
+                                    : unplayed.lastError().text());
+                db.rollback();
+                return {};
+            }
+        }
+        if (!db.commit()) {
+            if (problem)
+                *problem = "Cannot regenerate the dynamic playlists: " +
+                           db.lastError().text();
+            db.rollback();
+            return {};
+        }
+        ++dbGeneration();
+    }
+    topUpDynamicPlaylists(dbPath, problem);
+    Connection c(dbPath);
+    return c.ok ? emptyLists(c.db()) : QList<qint64>();
 }
 
 QHash<qint64, SongStat> songStats(const QString &dbPath) {

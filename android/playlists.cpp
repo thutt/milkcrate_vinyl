@@ -203,6 +203,7 @@ QList<PlaylistInfo> loadPlaylists(const QString &dbPath, QString *error) {
         r.limit = q.value(4);
         r.endMode = q.value(5).toString();
         r.entries = q.value(6).toInt();
+        r.info.entries = r.entries;
         r.members = q.value(7).toInt();
         rows.append(r);
     }
@@ -260,6 +261,7 @@ QVariant PlaylistModel::data(const QModelIndex &index, int role) const {
         case KindRole: return p->kind;
         case DetailRole: return p->detail;
         case MatchedRole: return p->matched;
+        case DrainedRole: return p->drained;
         case GroupRole: return p->kind == "dynamic" ? "playlist" : p->kind;
     }
     return {};
@@ -271,15 +273,38 @@ QHash<int, QByteArray> PlaylistModel::roleNames() const {
             {KindRole, "kind"},
             {DetailRole, "detail"},
             {MatchedRole, "matched"},
+            {DrainedRole, "drained"},
             {GroupRole, "group"}};
 }
 
 void PlaylistModel::setMatched(const QHash<qint64, int> &counts) {
     for (int row = 0; row < m_items.size(); ++row) {
+        if (m_items[row].drained) continue;  // nothing is left to choose
         auto it = counts.constFind(m_items[row].id);
         if (it == counts.constEnd() || *it == m_items[row].matched) continue;
         m_items[row].matched = *it;
         emit dataChanged(index(row), index(row), {MatchedRole});
+    }
+}
+
+void PlaylistModel::addDrained(const QList<qint64> &ids) {
+    for (qint64 id : ids) m_drained.insert(id);
+    for (int row = 0; row < m_items.size(); ++row) {
+        PlaylistInfo &p = m_items[row];
+        if (p.drained || !m_drained.contains(p.id)) continue;
+        p.drained = true;
+        p.matched = 0;
+        emit dataChanged(index(row), index(row), {MatchedRole, DrainedRole});
+    }
+}
+
+void PlaylistModel::clearDrained() {
+    m_drained.clear();
+    for (int row = 0; row < m_items.size(); ++row) {
+        if (!m_items[row].drained) continue;
+        m_items[row].drained = false;
+        m_items[row].matched = -1;
+        emit dataChanged(index(row), index(row), {MatchedRole, DrainedRole});
     }
 }
 
@@ -296,7 +321,12 @@ void PlaylistModel::setItems(const QList<PlaylistInfo> &items) {
         if (p.matched >= 0) known.insert(p.id, p.matched);
     beginResetModel();
     m_items = items;
-    for (PlaylistInfo &p : m_items) p.matched = known.value(p.id, -1);
+    for (PlaylistInfo &p : m_items) {
+        p.matched = known.value(p.id, -1);
+        if (p.entries > 0) m_drained.remove(p.id);  // it has songs again
+        p.drained = m_drained.contains(p.id);
+        if (p.drained) p.matched = 0;
+    }
     endResetModel();
     emit countChanged();
 }
@@ -311,9 +341,17 @@ QVariant EntryModel::data(const QModelIndex &index, int role) const {
         case AlbumRole: return t.album;
         case RatingRole: return t.rating;
         case DetailRole: {
-            if (m_dynamic || !t.detail.isEmpty()) return t.detail;
             auto it = m_stats.constFind(t.id);
-            return it == m_stats.constEnd() ? QString() : songStatText(*it);
+            if (!m_dynamic && t.detail.isEmpty())
+                return it == m_stats.constEnd() ? QString()
+                                                : songRowText(*it);
+            // why a dynamic playlist chose the song, then its tempo and
+            // loudness
+            const QString sound =
+                it == m_stats.constEnd() ? QString() : songSoundText(*it);
+            return sound.isEmpty() ? t.detail
+                   : t.detail.isEmpty() ? sound
+                                        : t.detail + "\n" + sound;
         }
     }
     return {};
